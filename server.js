@@ -52,13 +52,20 @@ ffmpeg -y -r 30 ${inputs} -i ${dir}/audio.mp3 \
 -map "[v]" -map ${images.length}:a -shortest -pix_fmt yuv420p ${out}
 `;
 
-    exec(cmd, (err) => {
-      if (err) {
-        console.error(err);
-        return res.status(500).json({ error: "FFmpeg failed" });
-      }
-      res.json({ videoPath: out });
+    exec(cmd, (err, stdout, stderr) => {
+  console.log("FFmpeg STDOUT:", stdout);
+  console.error("FFmpeg STDERR:", stderr);
+
+  if (err) {
+    return res.status(500).json({
+      error: "FFmpeg failed",
+      details: stderr || err.message
     });
+  }
+
+  res.json({ videoPath: out });
+});
+
 
   } catch (e) {
     console.error(e);
