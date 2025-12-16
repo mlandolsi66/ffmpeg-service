@@ -36,8 +36,8 @@ app.post("/render", async (req, res) => {
     fs.writeFileSync(`${dir}/audio.wav`, Buffer.from(ab));
 
     // 3) Video settings
-    const scaleSize = format === "9:16" ? "1080:1920" : "1920:1080"; // for scale/crop
-    const zoomSize = format === "9:16" ? "1080x1920" : "1920x1080";  // for zoompan s=
+    const scaleSize = format === "9:16" ? "1080:1920" : "1920:1080";
+    const zoomSize = format === "9:16" ? "1080x1920" : "1920x1080";
     const out = `${dir}/out.mp4`;
 
     // 4) Inputs (each image 6s)
@@ -45,20 +45,38 @@ app.post("/render", async (req, res) => {
       .map((_, i) => `-loop 1 -t 6 -i ${dir}/img${i}.jpg`)
       .join(" ");
 
-    // 5) Filter graph
+    // 5) Filter graph — deterministic pan + zoom variety
+    const motionPresets = [
+      // Pan right + zoom in
+      `zoompan=z='min(zoom+0.0006,1.07)':x='iw/2-(iw/zoom/2)+on*0.4':y='ih/2-(ih/zoom/2)'`,
+
+      // Pan left + zoom in
+      `zoompan=z='min(zoom+0.0006,1.07)':x='iw/2-(iw/zoom/2)-on*0.4':y='ih/2-(ih/zoom/2)'`,
+
+      // Pan down + zoom in
+      `zoompan=z='min(zoom+0.0005,1.06)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)+on*0.3'`,
+
+      // Pan up + zoom in
+      `zoompan=z='min(zoom+0.0005,1.06)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)-on*0.3'`
+    ];
+
     const filters = images
-      .map(
-        (_, i) =>
-          `[${i}:v]scale=${scaleSize}:force_original_aspect_ratio=increase,` +
+      .map((_, i) => {
+        const motion = motionPresets[i % motionPresets.length];
+        return (
+          `[${i}:v]` +
+          `scale=${scaleSize}:force_original_aspect_ratio=increase,` +
           `crop=${scaleSize},` +
-          `zoompan=z='min(zoom+0.0005,1.06)':d=180:s=${zoomSize}[v${i}]`
-      )
+          `${motion}:d=180:s=${zoomSize}[v${i}]`
+        );
+      })
       .join(";");
 
     const concatInputs = images.map((_, i) => `[v${i}]`).join("");
-    const filterComplex = `${filters};${concatInputs}concat=n=${images.length}:v=1:a=0[v]`;
+    const filterComplex =
+      `${filters};${concatInputs}concat=n=${images.length}:v=1:a=0[v]`;
 
-    // IMPORTANT: ONE SINGLE LINE COMMAND (no newlines)
+    // 6) FFmpeg command (single line)
     const cmd =
       `ffmpeg -y -r 30 ${inputs} ` +
       `-i ${dir}/audio.wav ` +
