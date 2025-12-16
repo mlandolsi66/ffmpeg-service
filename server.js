@@ -16,7 +16,7 @@ app.post("/render", async (req, res) => {
     const dir = `/tmp/${videoId}`;
     fs.mkdirSync(dir, { recursive: true });
 
-    // -------- IMAGES --------
+    // images
     for (let i = 0; i < images.length; i++) {
       const r = await fetch(images[i]);
       if (!r.ok) return res.status(400).json({ error: "Image download failed" });
@@ -24,22 +24,19 @@ app.post("/render", async (req, res) => {
       fs.writeFileSync(`${dir}/img${i}.jpg`, Buffer.from(b));
     }
 
-    // -------- AUDIO --------
+    // audio
     const ar = await fetch(audioUrl);
     if (!ar.ok) return res.status(400).json({ error: "Audio download failed" });
-
     const audioBuf = Buffer.from(await ar.arrayBuffer());
     fs.writeFileSync(`${dir}/audio.wav`, audioBuf);
 
-    // -------- VALIDATE + GET DURATION --------
+    // duration (ffprobe is truth)
     let audioDuration;
     try {
       audioDuration = parseFloat(
         execSync(
           `ffprobe -v error -show_entries format=duration -of csv=p=0 ${dir}/audio.wav`
-        )
-          .toString()
-          .trim()
+        ).toString().trim()
       );
     } catch {
       return res.status(400).json({ error: "Invalid WAV audio" });
@@ -54,29 +51,34 @@ app.post("/render", async (req, res) => {
       .map((_, i) => `-loop 1 -t ${perImageDuration} -i ${dir}/img${i}.jpg`)
       .join(" ");
 
-    const filters = images
+    // fade timing
+    const vFadeDur = 1.5;
+    const aFadeDur = 2.0;
+    const vFadeStart = Math.max(0, audioDuration - vFadeDur).toFixed(3);
+    const aFadeStart = Math.max(0, audioDuration - aFadeDur).toFixed(3);
+
+    const vFilters = images
       .map(
-        (_, i) => `
-        [${i}:v]
-        scale=${size}:force_original_aspect_ratio=increase,
-        crop=${size},
-        setpts=PTS-STARTPTS
-        [v${i}]
-      `
+        (_, i) =>
+          `[${i}:v]scale=${size}:force_original_aspect_ratio=increase,crop=${size},setpts=PTS-STARTPTS[v${i}]`
       )
       .join(";");
 
-    const concat = images.map((_, i) => `[v${i}]`).join("");
-    const filterComplex = `${filters};${concat}concat=n=${images.length}:v=1:a=0[v]`;
+    const concatInputs = images.map((_, i) => `[v${i}]`).join("");
+    const filterComplex =
+      `${vFilters};` +
+      `${concatInputs}concat=n=${images.length}:v=1:a=0[vraw];` +
+      `[vraw]fade=t=out:st=${vFadeStart}:d=${vFadeDur}[v];` +
+      `[${images.length}:a]afade=t=out:st=${aFadeStart}:d=${aFadeDur}[a]`;
 
     const cmd =
       `ffmpeg -y ${inputs} ` +
       `-i ${dir}/audio.wav ` +
       `-filter_complex "${filterComplex}" ` +
-      `-map "[v]" -map ${images.length}:a ` +
+      `-map "[v]" -map "[a]" ` +
       `-shortest -pix_fmt yuv420p "${out}"`;
 
-    exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, (err, _, stderr) => {
+    exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, (err, _stdout, stderr) => {
       if (err) {
         console.error(stderr);
         return res.status(500).json({ error: "FFmpeg failed" });
