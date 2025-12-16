@@ -28,7 +28,16 @@ app.post("/render", async (req, res) => {
     // Download audio
     const ar = await fetch(audioUrl);
     const ab = await ar.arrayBuffer();
-    fs.writeFileSync(`${dir}/audio.mp3`, Buffer.from(ab));
+    fs.writeFileSync(`${dir}/audio_raw.mp3`, Buffer.from(ab));
+
+    // Re-encode to WAV (FFmpeg-safe)
+    await new Promise((resolve, reject) => {
+      exec(
+        `ffmpeg -y -i ${dir}/audio_raw.mp3 -ar 44100 -ac 2 ${dir}/audio.wav`,
+        (err) => (err ? reject(err) : resolve())
+      );
+    });
+
 
     const size = format === "9:16" ? "1080x1920" : "1920x1080";
     const out = `${dir}/out.mp4`;
@@ -47,10 +56,12 @@ app.post("/render", async (req, res) => {
     const concat = images.map((_, i) => `[v${i}]`).join("");
 
     const cmd = `
-ffmpeg -y -r 30 ${inputs} -i ${dir}/audio.mp3 \
--filter_complex "${filters};${concat}concat=n=${images.length}:v=1:a=0[v]" \
--map "[v]" -map ${images.length}:a -shortest -pix_fmt yuv420p ${out}
-`;
+    ffmpeg -y -r 30 ${inputs} -fflags +genpts -i ${dir}/audio.mp3 \
+    -filter_complex "...stuff..." \
+    -map "[v]" -map ${images.length}:a \
+    -shortest -pix_fmt yuv420p ${out}
+    `;
+
 
     exec(cmd, (err, stdout, stderr) => {
   console.log("FFmpeg STDOUT:", stdout);
