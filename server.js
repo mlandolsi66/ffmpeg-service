@@ -6,7 +6,6 @@ import fs from "fs";
 const app = express();
 app.use(express.json({ limit: "50mb" }));
 
-// PUBLIC STAR OVERLAY (black background)
 const STAR_URL =
   "https://cdn.pixabay.com/video/2020/09/02/48869-460982617_large.mp4";
 
@@ -20,19 +19,19 @@ app.post("/render", async (req, res) => {
     const dir = `/tmp/${videoId}`;
     fs.mkdirSync(dir, { recursive: true });
 
-    // Images
+    // images
     for (let i = 0; i < images.length; i++) {
       const r = await fetch(images[i]);
       const b = await r.arrayBuffer();
       fs.writeFileSync(`${dir}/img${i}.jpg`, Buffer.from(b));
     }
 
-    // Audio
+    // audio
     const ar = await fetch(audioUrl);
     const ab = await ar.arrayBuffer();
     fs.writeFileSync(`${dir}/audio.wav`, Buffer.from(ab));
 
-    // Try to download stars
+    // stars
     let hasStars = true;
     const starPath = `${dir}/stars.mp4`;
     try {
@@ -58,8 +57,6 @@ app.post("/render", async (req, res) => {
       `x='(iw-ow)/2':y='(ih-oh)*(1-t/6)'`
     ];
 
-    const opacities = [0.25, 0.35, 0.30, 0.40];
-
     const filters = images.map((_, i) => {
       if (!hasStars) {
         return `
@@ -80,9 +77,7 @@ app.post("/render", async (req, res) => {
 
         [${images.length}:v]
         scale=${target},
-        colorchannelmixer=rr=${opacities[i % opacities.length]}:
-                           gg=${opacities[i % opacities.length]}:
-                           bb=${opacities[i % opacities.length]},
+        format=rgb24,
         setpts=PTS-STARTPTS
         [stars${i}];
 
@@ -103,19 +98,22 @@ app.post("/render", async (req, res) => {
       `-map "[v]" -map ${hasStars ? images.length + 1 : images.length}:a ` +
       `-shortest -pix_fmt yuv420p "${out}"`;
 
-    exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, (err) => {
+    exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, (err, stdout, stderr) => {
       if (err) {
-        console.error("FFmpeg failed");
-        return res.status(500).json({ error: "FFmpeg failed" });
+        console.error("FFmpeg STDERR:\n", stderr);
+        return res.status(500).json({
+          error: "FFmpeg failed",
+          stderr
+        });
       }
+
       const buf = fs.readFileSync(out);
       res.setHeader("Content-Type", "video/mp4");
       res.send(buf);
     });
 
   } catch (e) {
-    console.error("Server crash", e);
-    res.status(500).json({ error: "Server crash" });
+    res.status(500).json({ error: "Server crash", details: String(e) });
   }
 });
 
