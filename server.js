@@ -1,6 +1,6 @@
 import express from "express";
 import fetch from "node-fetch";
-import { exec } from "child_process";
+import { exec, execSync } from "child_process";
 import fs from "fs";
 
 const app = express();
@@ -28,23 +28,38 @@ app.post("/render", async (req, res) => {
     const ab = await ar.arrayBuffer();
     fs.writeFileSync(`${dir}/audio.wav`, Buffer.from(ab));
 
+    // get audio duration
+    const audioDuration = parseFloat(
+      execSync(
+        `ffprobe -v error -show_entries format=duration -of csv=p=0 ${dir}/audio.wav`
+      )
+        .toString()
+        .trim()
+    );
+
+    const perImageDuration = audioDuration / images.length;
+
     const size = format === "9:16" ? "1080:1920" : "1920:1080";
     const out = `${dir}/out.mp4`;
 
-    // inputs (6s per image – stable)
     const inputs = images
-      .map((_, i) => `-loop 1 -t 6 -i ${dir}/img${i}.jpg`)
+      .map((_, i) => `-loop 1 -t ${perImageDuration} -i ${dir}/img${i}.jpg`)
       .join(" ");
 
-    const filter = images
+    const filters = images
       .map(
-        (_, i) =>
-          `[${i}:v]scale=${size}:force_original_aspect_ratio=increase,crop=${size},setpts=PTS-STARTPTS[v${i}]`
+        (_, i) => `
+        [${i}:v]
+        scale=${size}:force_original_aspect_ratio=increase,
+        crop=${size},
+        setpts=PTS-STARTPTS
+        [v${i}]
+      `
       )
       .join(";");
 
     const concat = images.map((_, i) => `[v${i}]`).join("");
-    const filterComplex = `${filter};${concat}concat=n=${images.length}:v=1:a=0[v]`;
+    const filterComplex = `${filters};${concat}concat=n=${images.length}:v=1:a=0[v]`;
 
     const cmd =
       `ffmpeg -y ${inputs} ` +
@@ -59,7 +74,6 @@ app.post("/render", async (req, res) => {
       res.setHeader("Content-Type", "video/mp4");
       res.send(buf);
     });
-
   } catch {
     res.status(500).json({ error: "Server crash" });
   }
