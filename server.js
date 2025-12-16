@@ -61,18 +61,15 @@ ${concat}concat=n=${images.length}:v=1:a=0[v]
 `;
 
     exec(cmd, (err, stdout, stderr) => {
-      console.log("FFmpeg STDOUT:", stdout);
-      console.error("FFmpeg STDERR:", stderr);
+  if (err) {
+    console.error("FFmpeg failed:", stderr);
+  } else {
+    console.log("FFmpeg finished:", out);
+  }
+});
 
-      if (err) {
-        return res.status(500).json({
-          error: "FFmpeg failed",
-          details: stderr || err.message
-        });
-      }
-
-      return res.json({ videoPath: out });
-    });
+// Return immediately
+return res.json({ status: "render-started", jobDir: dir });
 
   } catch (e) {
     console.error(e);
