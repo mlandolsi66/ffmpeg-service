@@ -19,36 +19,31 @@ app.post("/render", async (req, res) => {
     // -------- IMAGES --------
     for (let i = 0; i < images.length; i++) {
       const r = await fetch(images[i]);
-      if (!r.ok) {
-        return res.status(400).json({ error: "Failed to download image" });
-      }
+      if (!r.ok) return res.status(400).json({ error: "Image download failed" });
       const b = await r.arrayBuffer();
       fs.writeFileSync(`${dir}/img${i}.jpg`, Buffer.from(b));
     }
 
-    // -------- AUDIO (CRITICAL FIX) --------
+    // -------- AUDIO --------
     const ar = await fetch(audioUrl);
-    if (!ar.ok) {
-      return res.status(400).json({ error: "Failed to download audio" });
-    }
+    if (!ar.ok) return res.status(400).json({ error: "Audio download failed" });
 
     const audioBuf = Buffer.from(await ar.arrayBuffer());
-
-    // sanity check (HTML error pages are small + start with "<")
-    if (audioBuf.length < 1000 || audioBuf.toString("utf8", 0, 1) === "<") {
-      return res.status(400).json({ error: "Invalid audio file" });
-    }
-
     fs.writeFileSync(`${dir}/audio.wav`, audioBuf);
 
-    // -------- AUDIO DURATION --------
-    const audioDuration = parseFloat(
-      execSync(
-        `ffprobe -v error -show_entries format=duration -of csv=p=0 ${dir}/audio.wav`
-      )
-        .toString()
-        .trim()
-    );
+    // -------- VALIDATE + GET DURATION --------
+    let audioDuration;
+    try {
+      audioDuration = parseFloat(
+        execSync(
+          `ffprobe -v error -show_entries format=duration -of csv=p=0 ${dir}/audio.wav`
+        )
+          .toString()
+          .trim()
+      );
+    } catch {
+      return res.status(400).json({ error: "Invalid WAV audio" });
+    }
 
     const perImageDuration = audioDuration / images.length;
 
@@ -81,7 +76,7 @@ app.post("/render", async (req, res) => {
       `-map "[v]" -map ${images.length}:a ` +
       `-shortest -pix_fmt yuv420p "${out}"`;
 
-    exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, (err, stdout, stderr) => {
+    exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, (err, _, stderr) => {
       if (err) {
         console.error(stderr);
         return res.status(500).json({ error: "FFmpeg failed" });
