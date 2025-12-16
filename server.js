@@ -49,14 +49,41 @@ app.post("/render", async (req, res) => {
         )
         .join(";");
 
-      const concat = images.map((_, i) => `[v${i}]`).join("");
+let filterComplex = "";
+let videoMap = "";
+
+if (images.length === 1) {
+  // SINGLE IMAGE — NO CONCAT
+  filterComplex = `
+[0:v]scale=${size}:force_original_aspect_ratio=increase,
+crop=${size},
+zoompan=z='min(zoom+0.0005,1.06)':d=180:s=${size}[v]
+`;
+  videoMap = "[v]";
+} else {
+  // MULTIPLE IMAGES — CONCAT
+  const filters = images
+    .map(
+      (_, i) =>
+        `[${i}:v]scale=${size}:force_original_aspect_ratio=increase,
+crop=${size},
+zoompan=z='min(zoom+0.0005,1.06)':d=180:s=${size}[v${i}]`
+    )
+    .join(";");
+
+  const concatInputs = images.map((_, i) => `[v${i}]`).join("");
+
+  filterComplex = `${filters};${concatInputs}concat=n=${images.length}:v=1:a=0[v]`;
+  videoMap = "[v]";
+}
 
       const cmd = `
 ffmpeg -y -r 30 ${inputs} -i ${dir}/audio.wav \
--filter_complex "${filters};${concat}concat=n=${images.length}:v=1:a=0[v]" \
--map "[v]" -map ${images.length}:a \
+-filter_complex "${filterComplex.replace(/\n/g, "")}" \
+-map "${videoMap}" -map ${images.length}:a \
 -shortest -pix_fmt yuv420p ${out}
 `;
+
 
       exec(cmd, async (err) => {
         if (err) {
