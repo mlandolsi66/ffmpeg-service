@@ -16,19 +16,32 @@ app.post("/render", async (req, res) => {
     const dir = `/tmp/${videoId}`;
     fs.mkdirSync(dir, { recursive: true });
 
-    // images
+    // -------- IMAGES --------
     for (let i = 0; i < images.length; i++) {
       const r = await fetch(images[i]);
+      if (!r.ok) {
+        return res.status(400).json({ error: "Failed to download image" });
+      }
       const b = await r.arrayBuffer();
       fs.writeFileSync(`${dir}/img${i}.jpg`, Buffer.from(b));
     }
 
-    // audio
+    // -------- AUDIO (CRITICAL FIX) --------
     const ar = await fetch(audioUrl);
-    const ab = await ar.arrayBuffer();
-    fs.writeFileSync(`${dir}/audio.wav`, Buffer.from(ab));
+    if (!ar.ok) {
+      return res.status(400).json({ error: "Failed to download audio" });
+    }
 
-    // get audio duration
+    const audioBuf = Buffer.from(await ar.arrayBuffer());
+
+    // sanity check (HTML error pages are small + start with "<")
+    if (audioBuf.length < 1000 || audioBuf.toString("utf8", 0, 1) === "<") {
+      return res.status(400).json({ error: "Invalid audio file" });
+    }
+
+    fs.writeFileSync(`${dir}/audio.wav`, audioBuf);
+
+    // -------- AUDIO DURATION --------
     const audioDuration = parseFloat(
       execSync(
         `ffprobe -v error -show_entries format=duration -of csv=p=0 ${dir}/audio.wav`
@@ -68,13 +81,17 @@ app.post("/render", async (req, res) => {
       `-map "[v]" -map ${images.length}:a ` +
       `-shortest -pix_fmt yuv420p "${out}"`;
 
-    exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, (err) => {
-      if (err) return res.status(500).json({ error: "FFmpeg failed" });
+    exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, (err, stdout, stderr) => {
+      if (err) {
+        console.error(stderr);
+        return res.status(500).json({ error: "FFmpeg failed" });
+      }
       const buf = fs.readFileSync(out);
       res.setHeader("Content-Type", "video/mp4");
       res.send(buf);
     });
-  } catch {
+  } catch (e) {
+    console.error(e);
     res.status(500).json({ error: "Server crash" });
   }
 });
