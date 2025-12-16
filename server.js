@@ -20,18 +20,12 @@ app.post("/render", async (req, res) => {
     // 1) Download images
     for (let i = 0; i < images.length; i++) {
       const r = await fetch(images[i]);
-      if (!r.ok) {
-        return res.status(400).json({ error: `Failed to download image ${i}` });
-      }
       const b = await r.arrayBuffer();
       fs.writeFileSync(`${dir}/img${i}.jpg`, Buffer.from(b));
     }
 
     // 2) Download audio
     const ar = await fetch(audioUrl);
-    if (!ar.ok) {
-      return res.status(400).json({ error: "Failed to download audio" });
-    }
     const ab = await ar.arrayBuffer();
     fs.writeFileSync(`${dir}/audio.wav`, Buffer.from(ab));
 
@@ -40,41 +34,32 @@ app.post("/render", async (req, res) => {
     const zoomSize = format === "9:16" ? "1080x1920" : "1920x1080";
     const out = `${dir}/out.mp4`;
 
-    // 4) Inputs (each image 6s)
+    // 4) Inputs (6s per image)
     const inputs = images
       .map((_, i) => `-loop 1 -t 6 -i ${dir}/img${i}.jpg`)
       .join(" ");
 
-    // 5) Filter graph — LAYERED PARALLAX
+    // 5) FAST, CLEAR MOTION (NO SPLIT, NO OVERLAY)
+    const motions = [
+      // Zoom in + pan right
+      `zoompan=z='1+0.0015*on':x='on*2':y='0'`,
+      // Zoom in + pan left
+      `zoompan=z='1+0.0015*on':x='-on*2':y='0'`,
+      // Zoom in + pan down
+      `zoompan=z='1+0.0015*on':x='0':y='on*2'`,
+      // Zoom in + pan up
+      `zoompan=z='1+0.0015*on':x='0':y='-on*2'`
+    ];
+
     const filters = images
       .map((_, i) => {
-        return `
-        [${i}:v]
-        scale=${scaleSize}:force_original_aspect_ratio=increase,
-        crop=${scaleSize},
-        split=2
-        [bg${i}][fg${i}];
-
-        [bg${i}]
-        scale=1.15*iw:1.15*ih,
-        gblur=sigma=12,
-        zoompan=z='1.02+0.001*sin(on/120)':
-        x='iw/2-(iw/zoom/2)+1*sin(on/160)':
-        y='ih/2-(ih/zoom/2)+1*cos(on/160)':
-        d=180:s=${zoomSize}
-        [bgm${i}];
-
-        [fg${i}]
-        zoompan=z='1.01+0.001*sin(on/100)':
-        x='iw/2-(iw/zoom/2)+2*sin(on/140)':
-        y='ih/2-(ih/zoom/2)+2*cos(on/140)':
-        d=180:s=${zoomSize}
-        [fgm${i}];
-
-        [bgm${i}][fgm${i}]
-        overlay=(W-w)/2:(H-h)/2
-        [v${i}]
-        `;
+        const motion = motions[i % motions.length];
+        return (
+          `[${i}:v]` +
+          `scale=${scaleSize}:force_original_aspect_ratio=increase,` +
+          `crop=${scaleSize},` +
+          `${motion}:d=180:s=${zoomSize}[v${i}]`
+        );
       })
       .join(";");
 
@@ -82,7 +67,6 @@ app.post("/render", async (req, res) => {
     const filterComplex =
       `${filters};${concatInputs}concat=n=${images.length}:v=1:a=0[v]`;
 
-    // 6) FFmpeg command
     const cmd =
       `ffmpeg -y -r 30 ${inputs} ` +
       `-i ${dir}/audio.wav ` +
@@ -90,30 +74,24 @@ app.post("/render", async (req, res) => {
       `-map "[v]" -map ${images.length}:a ` +
       `-shortest -pix_fmt yuv420p "${out}"`;
 
-    console.log("🎬 Running FFmpeg:", cmd);
+    console.log("🎬 FFmpeg:", cmd);
 
     exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, (err, stdout, stderr) => {
-      if (stdout) console.log("FFmpeg STDOUT:", stdout);
-      if (stderr) console.log("FFmpeg STDERR:", stderr);
-
       if (err) {
-        return res.status(500).json({
-          error: "FFmpeg failed",
-          details: stderr || err.message
-        });
+        console.error(stderr);
+        return res.status(500).json({ error: "FFmpeg failed" });
       }
-
       const videoBuffer = fs.readFileSync(out);
       res.setHeader("Content-Type", "video/mp4");
       res.send(videoBuffer);
     });
   } catch (e) {
-    console.error("🔥 Server crash:", e);
+    console.error(e);
     res.status(500).json({ error: "Server crash" });
   }
 });
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🎬 FFmpeg service running on 0.0.0.0:${PORT}`);
+  console.log(`🎬 FFmpeg service running on ${PORT}`);
 });
