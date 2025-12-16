@@ -14,7 +14,6 @@ app.post("/render", async (req, res) => {
       return res.status(400).json({ error: "Missing images or audio" });
     }
 
-    // Create working directory
     const id = Date.now().toString();
     const dir = `/tmp/${id}`;
     fs.mkdirSync(dir, { recursive: true });
@@ -22,34 +21,30 @@ app.post("/render", async (req, res) => {
     // Download images
     for (let i = 0; i < images.length; i++) {
       const r = await fetch(images[i]);
-      if (!r.ok) {
-        throw new Error(`Failed to download image ${i}`);
-      }
       const b = await r.arrayBuffer();
       fs.writeFileSync(`${dir}/img${i}.jpg`, Buffer.from(b));
     }
 
-    // Download WAV audio (NO MP3 ANYWHERE)
+    // Download WAV audio
     const ar = await fetch(audioUrl);
-    if (!ar.ok) {
-      throw new Error("Failed to download audio");
-    }
     const ab = await ar.arrayBuffer();
     fs.writeFileSync(`${dir}/audio.wav`, Buffer.from(ab));
 
-    const size = format === "9:16" ? "1080x1920" : "1920x1080";
+    // Output size
+    const width = format === "9:16" ? 1080 : 1920;
+    const height = format === "9:16" ? 1920 : 1080;
     const out = `${dir}/out.mp4`;
 
-    // Image inputs (5 seconds per image for now)
+    // Image inputs
     const inputs = images
       .map((_, i) => `-loop 1 -t 5 -i ${dir}/img${i}.jpg`)
       .join(" ");
 
-    // Simple, safe filters (NO motion yet)
+    // Filters (FIXED crop syntax)
     const filters = images
       .map(
         (_, i) =>
-          `[${i}:v]scale=${size}:force_original_aspect_ratio=increase,crop=${size},setsar=1[v${i}]`
+          `[${i}:v]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=w=${width}:h=${height},setsar=1[v${i}]`
       )
       .join(";");
 
