@@ -27,7 +27,7 @@ app.post("/render", async (req, res) => {
       fs.writeFileSync(`${dir}/img${i}.jpg`, Buffer.from(b));
     }
 
-    // 2) Download audio (WAV)
+    // 2) Download audio
     const ar = await fetch(audioUrl);
     if (!ar.ok) {
       return res.status(400).json({ error: "Failed to download audio" });
@@ -45,30 +45,36 @@ app.post("/render", async (req, res) => {
       .map((_, i) => `-loop 1 -t 6 -i ${dir}/img${i}.jpg`)
       .join(" ");
 
-    // 5) Filter graph — deterministic pan + zoom variety
-    const motionPresets = [
-      // Pan right + zoom in
-      `zoompan=z='min(zoom+0.0006,1.07)':x='iw/2-(iw/zoom/2)+on*0.4':y='ih/2-(ih/zoom/2)'`,
-
-      // Pan left + zoom in
-      `zoompan=z='min(zoom+0.0006,1.07)':x='iw/2-(iw/zoom/2)-on*0.4':y='ih/2-(ih/zoom/2)'`,
-
-      // Pan down + zoom in
-      `zoompan=z='min(zoom+0.0005,1.06)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)+on*0.3'`,
-
-      // Pan up + zoom in
-      `zoompan=z='min(zoom+0.0005,1.06)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)-on*0.3'`
-    ];
-
+    // 5) Filter graph — LAYERED PARALLAX
     const filters = images
       .map((_, i) => {
-        const motion = motionPresets[i % motionPresets.length];
-        return (
-          `[${i}:v]` +
-          `scale=${scaleSize}:force_original_aspect_ratio=increase,` +
-          `crop=${scaleSize},` +
-          `${motion}:d=180:s=${zoomSize}[v${i}]`
-        );
+        return `
+        [${i}:v]
+        scale=${scaleSize}:force_original_aspect_ratio=increase,
+        crop=${scaleSize},
+        split=2
+        [bg${i}][fg${i}];
+
+        [bg${i}]
+        scale=1.15*iw:1.15*ih,
+        gblur=sigma=12,
+        zoompan=z='1.02+0.001*sin(on/120)':
+        x='iw/2-(iw/zoom/2)+1*sin(on/160)':
+        y='ih/2-(ih/zoom/2)+1*cos(on/160)':
+        d=180:s=${zoomSize}
+        [bgm${i}];
+
+        [fg${i}]
+        zoompan=z='1.01+0.001*sin(on/100)':
+        x='iw/2-(iw/zoom/2)+2*sin(on/140)':
+        y='ih/2-(ih/zoom/2)+2*cos(on/140)':
+        d=180:s=${zoomSize}
+        [fgm${i}];
+
+        [bgm${i}][fgm${i}]
+        overlay=(W-w)/2:(H-h)/2
+        [v${i}]
+        `;
       })
       .join(";");
 
@@ -76,7 +82,7 @@ app.post("/render", async (req, res) => {
     const filterComplex =
       `${filters};${concatInputs}concat=n=${images.length}:v=1:a=0[v]`;
 
-    // 6) FFmpeg command (single line)
+    // 6) FFmpeg command
     const cmd =
       `ffmpeg -y -r 30 ${inputs} ` +
       `-i ${dir}/audio.wav ` +
