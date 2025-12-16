@@ -69,4 +69,8 @@ ffmpeg -y -r 30 ${inputs} -i ${dir}/audio.wav \
   }
 });
 
-app.listen(3000, () => console.log("🎬 FFmpeg service running"));
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`🎬 FFmpeg service running on port ${PORT}`);
+});
