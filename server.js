@@ -2,107 +2,112 @@ import express from "express";
 import fetch from "node-fetch";
 import { exec } from "child_process";
 import fs from "fs";
+import path from "path";
 
 const app = express();
 app.use(express.json({ limit: "50mb" }));
 
 app.post("/render", async (req, res) => {
-  const { videoId, images, audioUrl, format } = req.body;
+  try {
+    const { videoId, images, audioUrl, format } = req.body;
 
-  if (!videoId || !images?.length || !audioUrl) {
-    return res.status(400).json({ error: "Missing input" });
-  }
+    if (!videoId || !images?.length || !audioUrl) {
+      return res.status(400).json({ error: "Missing videoId, images or audio" });
+    }
 
-  // 🔹 RESPOND IMMEDIATELY (THIS FIXES 502)
-  res.json({
-    status: "render-started",
-    videoId
-  });
+    const dir = `/tmp/${videoId}`;
+    fs.mkdirSync(dir, { recursive: true });
 
-  // 🔹 BACKGROUND PROCESS (DO NOT AWAIT)
-  setImmediate(async () => {
-    try {
-      const dir = `/tmp/${videoId}`;
-      fs.mkdirSync(dir, { recursive: true });
+    /* -------------------------
+       DOWNLOAD IMAGES
+    --------------------------*/
+    for (let i = 0; i < images.length; i++) {
+      const r = await fetch(images[i]);
+      const b = await r.arrayBuffer();
+      fs.writeFileSync(`${dir}/img${i}.jpg`, Buffer.from(b));
+    }
 
-      // Download images
-      for (let i = 0; i < images.length; i++) {
-        const r = await fetch(images[i]);
-        fs.writeFileSync(`${dir}/img${i}.jpg`, Buffer.from(await r.arrayBuffer()));
+    /* -------------------------
+       DOWNLOAD AUDIO (WAV)
+    --------------------------*/
+    const ar = await fetch(audioUrl);
+    const ab = await ar.arrayBuffer();
+    fs.writeFileSync(`${dir}/audio.wav`, Buffer.from(ab));
+
+    /* -------------------------
+       VIDEO SETTINGS
+    --------------------------*/
+    const scaleSize = format === "9:16" ? "1080:1920" : "1920:1080";
+    const zoomSize  = format === "9:16" ? "1080x1920" : "1920x1080";
+    const out = `${dir}/out.mp4`;
+
+    /* -------------------------
+       INPUTS
+    --------------------------*/
+    const inputs = images
+      .map((_, i) => `-loop 1 -t 6 -i ${dir}/img${i}.jpg`)
+      .join(" ");
+
+    /* -------------------------
+       FILTER GRAPH
+    --------------------------*/
+    const filters = images
+      .map(
+        (_, i) =>
+          `[${i}:v]scale=${scaleSize}:force_original_aspect_ratio=increase,` +
+          `crop=${scaleSize},` +
+          `zoompan=z='min(zoom+0.0005,1.06)':d=180:s=${zoomSize}[v${i}]`
+      )
+      .join(";");
+
+    const concatInputs = images.map((_, i) => `[v${i}]`).join("");
+
+    const filterComplex = `
+${filters};
+${concatInputs}concat=n=${images.length}:v=1:a=0[v]
+`.replace(/\n/g, "");
+
+    /* -------------------------
+       FFMPEG COMMAND
+    --------------------------*/
+    const cmd = `
+ffmpeg -y -r 30
+${inputs}
+-i ${dir}/audio.wav
+-filter_complex "${filterComplex}"
+-map "[v]"
+-map ${images.length}:a
+-shortest
+-pix_fmt yuv420p
+${out}
+`;
+
+    console.log("🎬 Running FFmpeg:\n", cmd);
+
+    exec(cmd, (err, stdout, stderr) => {
+      if (err) {
+        console.error("❌ FFmpeg STDERR:\n", stderr);
+        return res.status(500).json({
+          error: "FFmpeg failed",
+          details: stderr
+        });
       }
 
-      // Download WAV audio
-      const ar = await fetch(audioUrl);
-      fs.writeFileSync(`${dir}/audio.wav`, Buffer.from(await ar.arrayBuffer()));
+      const videoBuffer = fs.readFileSync(out);
+      res.setHeader("Content-Type", "video/mp4");
+      res.send(videoBuffer);
+    });
 
-      const size = format === "9:16" ? "1080:1920" : "1920:1080";
-      const out = `${dir}/out.mp4`;
-
-      const inputs = images
-        .map((_, i) => `-loop 1 -t 6 -i ${dir}/img${i}.jpg`)
-        .join(" ");
-
-      const filters = images
-        .map(
-          (_, i) =>
-            `[${i}:v]scale=${size}:force_original_aspect_ratio=increase,crop=${size},zoompan=z='min(zoom+0.0005,1.06)':d=180:s=${size}[v${i}]`
-        )
-        .join(";");
-
-let filterComplex = "";
-let videoMap = "";
-
-if (images.length === 1) {
-  // SINGLE IMAGE — NO CONCAT
-  filterComplex = `
-[0:v]scale=${size}:force_original_aspect_ratio=increase,
-crop=${size},
-zoompan=z='min(zoom+0.0005,1.06)':d=180:s=${size}[v]
-`;
-  videoMap = "[v]";
-} else {
-  // MULTIPLE IMAGES — CONCAT
-  const filters = images
-    .map(
-      (_, i) =>
-        `[${i}:v]scale=${size}:force_original_aspect_ratio=increase,
-crop=${size},
-zoompan=z='min(zoom+0.0005,1.06)':d=180:s=${size}[v${i}]`
-    )
-    .join(";");
-
-  const concatInputs = images.map((_, i) => `[v${i}]`).join("");
-
-  filterComplex = `${filters};${concatInputs}concat=n=${images.length}:v=1:a=0[v]`;
-  videoMap = "[v]";
-}
-
-      const cmd = `
-ffmpeg -y -r 30 ${inputs} -i ${dir}/audio.wav \
--filter_complex "${filterComplex.replace(/\n/g, "")}" \
--map "${videoMap}" -map ${images.length}:a \
--shortest -pix_fmt yuv420p ${out}
-`;
-
-
-      exec(cmd, async (err) => {
-        if (err) {
-          console.error("❌ FFmpeg failed", err);
-          return;
-        }
-
-        console.log("✅ FFmpeg finished:", out);
-
-        // OPTIONAL: upload to Supabase here later
-      });
-    } catch (e) {
-      console.error("🔥 Background render failed", e);
-    }
-  });
+  } catch (e) {
+    console.error("🔥 Server crash:", e);
+    res.status(500).json({ error: "Server crash" });
+  }
 });
 
-// 🚨 MUST USE process.env.PORT
+/* -------------------------
+   START SERVER (RAILWAY)
+--------------------------*/
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, "0.0.0.0", () =>
-  console.log(`🎬 FFmpeg service running on 0.0.0.0:${PORT}`)
-);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`🎬 FFmpeg service running on 0.0.0.0:${PORT}`);
+});
