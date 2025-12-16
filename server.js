@@ -16,14 +16,14 @@ app.post("/render", async (req, res) => {
     const dir = `/tmp/${videoId}`;
     fs.mkdirSync(dir, { recursive: true });
 
-    // Download images
+    // images
     for (let i = 0; i < images.length; i++) {
       const r = await fetch(images[i]);
       const b = await r.arrayBuffer();
       fs.writeFileSync(`${dir}/img${i}.jpg`, Buffer.from(b));
     }
 
-    // Download audio
+    // audio
     const ar = await fetch(audioUrl);
     const ab = await ar.arrayBuffer();
     fs.writeFileSync(`${dir}/audio.wav`, Buffer.from(ab));
@@ -31,24 +31,20 @@ app.post("/render", async (req, res) => {
     const size = format === "9:16" ? "1080:1920" : "1920:1080";
     const out = `${dir}/out.mp4`;
 
-    // Inputs: 6 seconds per image (safe default)
+    // inputs (6s per image – stable)
     const inputs = images
       .map((_, i) => `-loop 1 -t 6 -i ${dir}/img${i}.jpg`)
       .join(" ");
 
-    // Gentle breathing zoom (1.00 → 1.03 over 6s)
-    const filters = images.map((_, i) => `
-      [${i}:v]
-      scale=w=iw*(1+0.03*t/6):h=ih*(1+0.03*t/6),
-      scale=${size}:force_original_aspect_ratio=increase,
-      crop=${size},
-      setpts=PTS-STARTPTS
-      [v${i}]
-    `).join(";");
+    const filter = images
+      .map(
+        (_, i) =>
+          `[${i}:v]scale=${size}:force_original_aspect_ratio=increase,crop=${size},setpts=PTS-STARTPTS[v${i}]`
+      )
+      .join(";");
 
     const concat = images.map((_, i) => `[v${i}]`).join("");
-    const filterComplex =
-      `${filters};${concat}concat=n=${images.length}:v=1:a=0[v]`;
+    const filterComplex = `${filter};${concat}concat=n=${images.length}:v=1:a=0[v]`;
 
     const cmd =
       `ffmpeg -y ${inputs} ` +
