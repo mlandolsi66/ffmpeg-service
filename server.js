@@ -8,28 +8,36 @@ app.use(express.json({ limit: "50mb" }));
 
 app.post("/render", async (req, res) => {
   try {
-    const { images, audioUrl, format } = req.body;
+    const { videoId, images, audioUrl, format } = req.body;
 
-    if (!images?.length || !audioUrl) {
-      return res.status(400).json({ error: "Missing images or audio" });
+    if (!videoId || !images?.length || !audioUrl) {
+      return res.status(400).json({ error: "Missing inputs" });
     }
 
-    const id = Date.now().toString();
-    const dir = `/tmp/${id}`;
-    fs.mkdirSync(dir);
+    const dir = `/tmp/${videoId}`;
+    fs.mkdirSync(dir, { recursive: true });
 
-    // 1️⃣ Download images
+    console.log("🎬 Rendering video:", videoId);
+
+    /* ----------------------------
+       1️⃣ Download images
+    ---------------------------- */
     for (let i = 0; i < images.length; i++) {
       const r = await fetch(images[i]);
       const b = await r.arrayBuffer();
       fs.writeFileSync(`${dir}/img${i}.jpg`, Buffer.from(b));
     }
 
-    // 2️⃣ Download audio (WAV ONLY)
+    /* ----------------------------
+       2️⃣ Download WAV narration
+    ---------------------------- */
     const ar = await fetch(audioUrl);
     const ab = await ar.arrayBuffer();
     fs.writeFileSync(`${dir}/audio.wav`, Buffer.from(ab));
 
+    /* ----------------------------
+       3️⃣ FFmpeg settings
+    ---------------------------- */
     const size = format === "9:16" ? "1080:1920" : "1920:1080";
     const out = `${dir}/out.mp4`;
 
@@ -40,7 +48,9 @@ app.post("/render", async (req, res) => {
     const filters = images
       .map(
         (_, i) =>
-          `[${i}:v]scale=${size}:force_original_aspect_ratio=increase,crop=${size},zoompan=z='min(zoom+0.0005,1.06)':d=180:s=${size}[v${i}]`
+          `[${i}:v]scale=${size}:force_original_aspect_ratio=increase,` +
+          `crop=${size},` +
+          `zoompan=z='min(zoom+0.0006,1.06)':d=180:s=${size}[v${i}]`
       )
       .join(";");
 
@@ -53,24 +63,36 @@ ffmpeg -y -r 30 ${inputs} -i ${dir}/audio.wav \
 -shortest -pix_fmt yuv420p ${out}
 `;
 
-    exec(cmd, (err) => {
+    /* ----------------------------
+       4️⃣ Run FFmpeg
+    ---------------------------- */
+    exec(cmd, (err, stdout, stderr) => {
       if (err) {
-        return res.status(500).json({ error: "FFmpeg failed" });
+        console.error("❌ FFmpeg failed:", stderr);
+        return res.status(500).json({
+          error: "FFmpeg failed",
+          details: stderr
+        });
       }
 
-      const videoBuffer = fs.readFileSync(out);
-      res.setHeader("Content-Type", "video/mp4");
-      res.send(videoBuffer);
+      console.log("✅ FFmpeg done:", out);
+
+      return res.json({
+        status: "done",
+        videoPath: `/tmp/${videoId}/out.mp4`
+      });
     });
 
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "Server crash" });
+  } catch (err) {
+    console.error("🔥 Server crash:", err);
+    return res.status(500).json({ error: "Server crash" });
   }
 });
 
+/* ----------------------------
+   Railway-compatible listen
+---------------------------- */
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🎬 FFmpeg service running on 0.0.0.0:${PORT}`);
 });
