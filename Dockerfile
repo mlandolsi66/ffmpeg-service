@@ -4,10 +4,13 @@ RUN apt-get update && apt-get install -y ffmpeg
 
 WORKDIR /app
 
+COPY stars.mp4 /app/stars.mp4
+
 COPY package.json ./
 RUN npm install
 
 COPY server.js ./
+
 
 EXPOSE 3000
 
