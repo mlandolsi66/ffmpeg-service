@@ -31,15 +31,11 @@ app.post("/render", async (req, res) => {
     const ab = await ar.arrayBuffer();
     fs.writeFileSync(`${dir}/audio.wav`, Buffer.from(ab));
 
-    // concat list
-    const perImageSeconds = 6;
+    // concat list (NO duration!)
     let list = "";
     for (let i = 0; i < images.length; i++) {
       list += `file '${dir}/img${i}.jpg'\n`;
-      list += `duration ${perImageSeconds}\n`;
     }
-    // concat demuxer requirement: repeat last frame
-    list += `file '${dir}/img${images.length - 1}.jpg'\n`;
     fs.writeFileSync(`${dir}/list.txt`, list);
 
     const W = format === "9:16" ? 1080 : 1920;
@@ -47,12 +43,9 @@ app.post("/render", async (req, res) => {
 
     const out = `${dir}/out.mp4`;
 
-    // IMPORTANT:
-    // - scale can be W:H (use colon)
-    // - crop MUST be W:H (use colon)  ✅ FIX
     const cmd = `
 ffmpeg -y -hide_banner -loglevel error \
--f concat -safe 0 -i ${dir}/list.txt \
+-stream_loop -1 -f concat -safe 0 -i ${dir}/list.txt \
 -i ${dir}/audio.wav \
 -vf "scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}" \
 -r 30 -shortest -pix_fmt yuv420p \
@@ -62,7 +55,7 @@ ${out}
     exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, (err, _stdout, stderr) => {
       if (err) {
         console.error("❌ FFmpeg failed:", stderr || err.message);
-        return res.status(500).json({ error: "FFmpeg failed", stderr: (stderr || "").slice(-1500) });
+        return res.status(500).json({ error: "FFmpeg failed" });
       }
 
       const buf = fs.readFileSync(out);
@@ -77,5 +70,5 @@ ${out}
 });
 
 app.listen(8080, "0.0.0.0", () => {
-  console.log("🎬 FFmpeg service running on 0.0.0.0:8080");
+  console.log("🎬 FFmpeg service running");
 });
