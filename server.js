@@ -48,7 +48,7 @@ ffmpeg -y -hide_banner -loglevel error \
 -stream_loop -1 -f concat -safe 0 -i ${dir}/list.txt \
 -i ${dir}/audio.wav \
 -vf "scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}" \
--r 30 -shortest -pix_fmt yuv420p \
+-r 30 -shortest -pix_fmt yuv420p -c:v libx264 -preset veryfast -crf 28 -movflags +faststart \
 ${out}
 `.replace(/\s+/g, " ").trim();
 
