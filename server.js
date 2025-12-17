@@ -202,7 +202,7 @@ app.post("/render", async (req, res) => {
         `[${narrationIndex}:a]afade=t=out:st=${aFadeStart}:d=${aFadeDur}[a]`;
     } else {
       // ambience volume: start conservative (0.14). You can tweak 0.12–0.20.
-      const ambVol = 0.22;
+      const ambVol = 0.2;
 
       filterComplex =
         `${vFilters};` +
