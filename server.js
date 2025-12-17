@@ -20,28 +20,22 @@ function normalizeTheme(t) {
  * If your Wix themes are already exactly "adventure", "fairy", etc. you’re done.
  */
 function pickAmbienceFilename(themeRaw) {
-  const theme = normalizeTheme(themeRaw);
+  const theme = String(themeRaw || "").trim().toLowerCase();
 
-  // ✅ EDIT THIS mapping to match your actual 6 themes.
   const map = {
-    adventure: "adventure.wav",
-    fairy: "fairy.wav",
-    forest: "forest.wav",
-    underwater: "underwater.wav",
-    ocean: "waves.wav",          // example alias
-    space: "whitenoise-space.wav",
-    lullaby: "lullaby.wav",
-    "music-box": "music-box-34179.wav",
+    "fairy garden adventure": "fairy-garden-adventure.wav",
+    "princess star dreams": "fairy.wav",
+
+    "magic forest friends": "magic-forest-friends.wav",
+
+    "dino explorer": "music-box-34179.wav",
+
+    "ocean wonders": "waves.wav", // or "underwater.wav" if you prefer
+
+    "space bedtime journey": "whitenoise-space.wav",
   };
 
-  // If theme matches directly, use it.
-  if (map[theme]) return map[theme];
-
-  // If you pass a theme that already equals a filename stem, try "<theme>.wav"
-  // e.g., theme="waves" -> waves.wav
-  if (theme) return `${theme}.wav`;
-
-  return null;
+  return map[theme] || null;
 }
 
 async function downloadToFile(url, filepath) {
