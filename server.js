@@ -8,7 +8,6 @@ app.use(express.json({ limit: "50mb" }));
 
 const ASSET_BASE_URL = process.env.ASSET_BASE_URL;
 
-// ambience library
 const AMBIENCE = {
   forest: "forest.wav",
   ocean: "underwater.wav",
@@ -21,16 +20,11 @@ const AMBIENCE = {
 
 const OVERLAY = "sparkles.mp4";
 
-let RUNNING = false;
-
 app.post("/render", async (req, res) => {
-  if (RUNNING) return res.status(429).json({ error: "busy" });
-  RUNNING = true;
-
   try {
     const { videoId, images, audioUrl, format, theme = "" } = req.body;
+
     if (!videoId || !images?.length || !audioUrl) {
-      RUNNING = false;
       return res.status(400).json({ error: "missing inputs" });
     }
 
@@ -77,7 +71,6 @@ app.post("/render", async (req, res) => {
     const ambienceIndex = images.length + 1;
     const voiceIndex = images.length + 2;
 
-    // SAFE pan (no zoompan)
     const motions = [
       "x='(iw-ow)*(t/6)':y='(ih-oh)/2'",
       "x='(iw-ow)*(1-t/6)':y='(ih-oh)/2'",
@@ -121,14 +114,16 @@ app.post("/render", async (req, res) => {
       `-shortest -pix_fmt yuv420p "${out}"`;
 
     exec(cmd, { maxBuffer: 1024 * 1024 * 30 }, (err) => {
-      RUNNING = false;
-      if (err) return res.status(500).json({ error: "FFmpeg failed" });
+      if (err) {
+        console.error(err);
+        return res.status(500).json({ error: "FFmpeg failed" });
+      }
       res.setHeader("Content-Type", "video/mp4");
       res.send(fs.readFileSync(out));
     });
 
-  } catch {
-    RUNNING = false;
+  } catch (e) {
+    console.error(e);
     res.status(500).json({ error: "server crash" });
   }
 });
