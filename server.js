@@ -2,122 +2,130 @@ import express from "express";
 import fetch from "node-fetch";
 import { exec } from "child_process";
 import fs from "fs";
+import path from "path";
 
 const app = express();
 app.use(express.json({ limit: "50mb" }));
 
-const ASSET_BASE_URL = process.env.ASSET_BASE_URL;
+// 🔒 simple in-memory lock (one render at a time)
+let RUNNING = false;
 
-const AMBIENCE = {
-  forest: "forest.wav",
-  ocean: "ocean.wav",
-  waves: "waves.wav",
-  space: "space.wav",
-  magic: "fairy.wav",
-  lullaby: "lullaby.wav",
-  default: "lullaby.wav"
-};
+// 🌍 Supabase public base (NO secrets here)
+const ASSET_BASE =
+  "https://mbjhocmwfhmurkuqyxfd.supabase.co/storage/v1/object/public/videos";
+
+// 🎵 ambience per theme
+function ambienceForTheme(theme = "") {
+  const t = theme.toLowerCase();
+  if (t.includes("ocean")) return "ambience/ocean.wav";
+  if (t.includes("space")) return "ambience/space.wav";
+  if (t.includes("forest")) return "ambience/forest.wav";
+  return "ambience/bedtime.wav";
+}
 
 app.post("/render", async (req, res) => {
+  if (RUNNING) {
+    return res.status(429).json({ error: "busy" });
+  }
+
+  RUNNING = true;
+
   try {
-    const { videoId, images, audioUrl, format, theme = "" } = req.body;
+    const { videoId, images, audioUrl, format, theme } = req.body;
 
     if (!videoId || !images?.length || !audioUrl) {
-      return res.status(400).json({ error: "missing inputs" });
+      RUNNING = false;
+      return res.status(400).json({ error: "Missing inputs" });
     }
 
     const dir = `/tmp/${videoId}`;
     fs.mkdirSync(dir, { recursive: true });
 
-    // -----------------------------
-    // Download images
-    // -----------------------------
+    // --------------------------------------------------
+    // 1️⃣ Download images
+    // --------------------------------------------------
     for (let i = 0; i < images.length; i++) {
       const r = await fetch(images[i]);
-      fs.writeFileSync(`${dir}/img${i}.jpg`, Buffer.from(await r.arrayBuffer()));
+      if (!r.ok) throw new Error("image download failed");
+      const b = await r.arrayBuffer();
+      fs.writeFileSync(`${dir}/img${i}.jpg`, Buffer.from(b));
     }
 
-    // -----------------------------
-    // Download narration
-    // -----------------------------
+    // --------------------------------------------------
+    // 2️⃣ Create concat list
+    // --------------------------------------------------
+    const listTxt = images
+      .map((_, i) => `file '${dir}/img${i}.jpg'\nduration 6`)
+      .join("\n");
+
+    fs.writeFileSync(`${dir}/list.txt`, listTxt + "\n");
+
+    // --------------------------------------------------
+    // 3️⃣ Download narration
+    // --------------------------------------------------
     const ar = await fetch(audioUrl);
+    if (!ar.ok) throw new Error("audio download failed");
     fs.writeFileSync(`${dir}/voice.wav`, Buffer.from(await ar.arrayBuffer()));
 
-    // -----------------------------
-    // Select + download ambience
-    // -----------------------------
-    const t = theme.toLowerCase();
-    let ambFile = AMBIENCE.default;
-    if (t.includes("forest")) ambFile = AMBIENCE.forest;
-    else if (t.includes("ocean") || t.includes("sea")) ambFile = AMBIENCE.ocean;
-    else if (t.includes("space")) ambFile = AMBIENCE.space;
-    else if (t.includes("magic") || t.includes("fairy")) ambFile = AMBIENCE.magic;
+    // --------------------------------------------------
+    // 4️⃣ Download ambience + sparkles
+    // --------------------------------------------------
+    const ambiencePath = ambienceForTheme(theme);
+    const ambienceUrl = `${ASSET_BASE}/${ambiencePath}`;
+    const sparklesUrl = `${ASSET_BASE}/overlays/sparkles_fixed.mp4`;
 
-    await fetch(`${ASSET_BASE_URL}/ambience/${ambFile}`)
-      .then(r => r.arrayBuffer())
-      .then(b => fs.writeFileSync(`${dir}/ambience.wav`, Buffer.from(b)));
+    fs.writeFileSync(
+      `${dir}/ambience.wav`,
+      Buffer.from(await (await fetch(ambienceUrl)).arrayBuffer())
+    );
 
-    // -----------------------------
-    // Download sparkle overlay
-    // -----------------------------
-    await fetch(`${ASSET_BASE_URL}/overlays/sparkles.mp4`)
-      .then(r => r.arrayBuffer())
-      .then(b => fs.writeFileSync(`${dir}/sparkles.mp4`, Buffer.from(b)));
+    fs.writeFileSync(
+      `${dir}/sparkles.mp4`,
+      Buffer.from(await (await fetch(sparklesUrl)).arrayBuffer())
+    );
 
-    // -----------------------------
-    // Video settings
-    // -----------------------------
-    const W = format === "9:16" ? 1080 : 1920;
-    const H = format === "9:16" ? 1920 : 1080;
-    const sceneSeconds = 6;
-
-    // -----------------------------
-    // Concat list
-    // -----------------------------
-    let concatTxt = "";
-    for (let i = 0; i < images.length; i++) {
-      concatTxt += `file '${dir}/img${i}.jpg'\n`;
-      concatTxt += `duration ${sceneSeconds}\n`;
-    }
-    concatTxt += `file '${dir}/img${images.length - 1}.jpg'\n`;
-    fs.writeFileSync(`${dir}/list.txt`, concatTxt);
-
+    // --------------------------------------------------
+    // 5️⃣ Video geometry
+    // --------------------------------------------------
+    const size = format === "9:16" ? "1080x1920" : "1920x1080";
     const out = `${dir}/out.mp4`;
 
-    // -----------------------------
-    // FFmpeg (SAFE)
-    // -----------------------------
-    const cmd =
-      `ffmpeg -y -hide_banner -loglevel error ` +
-      `-f concat -safe 0 -i ${dir}/list.txt ` +
-      `-stream_loop -1 -i ${dir}/sparkles.mp4 ` +
-      `-i ${dir}/voice.wav ` +
-      `-i ${dir}/ambience.wav ` +
-      `-filter_complex "` +
-        `[0:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}[base];` +
-        `[1:v]scale=${W}:${H},format=rgba,colorchannelmixer=aa=0.10[fx];` +
-        `[base][fx]overlay=0:0[v];` +
-        `[2:a]volume=1.0[voice];` +
-        `[3:a]volume=0.18[amb];` +
-        `[voice][amb]amix=inputs=2:duration=shortest[a]` +
-      `" ` +
-      `-map "[v]" -map "[a]" -shortest -r 30 -pix_fmt yuv420p "${out}"`;
+    // --------------------------------------------------
+    // 6️⃣ FFmpeg (STABLE + FAST)
+    // --------------------------------------------------
+    const cmd = `
+ffmpeg -y \
+-f concat -safe 0 -i ${dir}/list.txt \
+-i ${dir}/voice.wav \
+-stream_loop -1 -i ${dir}/ambience.wav \
+-stream_loop -1 -i ${dir}/sparkles.mp4 \
+-filter_complex "
+[0:v]scale=${size}:force_original_aspect_ratio=increase,crop=${size},format=yuv420p[base];
+[3:v]scale=${size},format=rgba,colorchannelmixer=aa=0.10[fx];
+[base][fx]overlay=0:0[v];
+[1:a][2:a]amix=inputs=2:weights=1 0.15[a]
+" \
+-map "[v]" -map "[a]" \
+-shortest -r 30 -pix_fmt yuv420p \
+${out}
+`.replace(/\s+/g, " ").trim();
 
-    exec(cmd, { maxBuffer: 1024 * 1024 * 30 }, (err, _, stderr) => {
+    exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, (err, _out, errOut) => {
+      RUNNING = false;
+
       if (err) {
-        return res.status(500).json({
-          error: "FFmpeg failed",
-          stderr: stderr?.slice(-4000)
-        });
+        console.error("❌ FFmpeg failed:", errOut);
+        return res.status(500).json({ error: "FFmpeg failed" });
       }
 
       const buf = fs.readFileSync(out);
       res.setHeader("Content-Type", "video/mp4");
       res.send(buf);
     });
-
   } catch (e) {
-    res.status(500).json({ error: "server crash", details: String(e) });
+    RUNNING = false;
+    console.error("🔥 render crash:", e);
+    res.status(500).json({ error: "Server crash" });
   }
 });
 
