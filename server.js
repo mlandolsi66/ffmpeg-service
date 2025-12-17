@@ -8,6 +8,7 @@ app.use(express.json({ limit: "50mb" }));
 
 const ASSET_BASE_URL = process.env.ASSET_BASE_URL;
 
+// ambience library
 const AMBIENCE = {
   forest: "forest.wav",
   ocean: "underwater.wav",
@@ -22,8 +23,9 @@ const OVERLAY = "sparkles.mp4";
 
 app.post("/render", async (req, res) => {
   try {
-    const { videoId, images, audioUrl, format, theme = "" } = req.body;
+    console.log("🎬 /render called");
 
+    const { videoId, images, audioUrl, format, theme = "" } = req.body;
     if (!videoId || !images?.length || !audioUrl) {
       return res.status(400).json({ error: "missing inputs" });
     }
@@ -31,17 +33,21 @@ app.post("/render", async (req, res) => {
     const dir = `/tmp/${videoId}`;
     fs.mkdirSync(dir, { recursive: true });
 
-    // images
+    // -----------------------------
+    // Download images
+    // -----------------------------
     for (let i = 0; i < images.length; i++) {
+      console.log(`⬇️ image ${i}`);
       const r = await fetch(images[i]);
       fs.writeFileSync(`${dir}/img${i}.jpg`, Buffer.from(await r.arrayBuffer()));
     }
 
     // narration
+    console.log("⬇️ narration");
     const voiceRes = await fetch(audioUrl);
     fs.writeFileSync(`${dir}/voice.wav`, Buffer.from(await voiceRes.arrayBuffer()));
 
-    // ambience select
+    // ambience selection
     const t = theme.toLowerCase();
     let amb = AMBIENCE.default;
     if (t.includes("forest")) amb = AMBIENCE.forest;
@@ -49,22 +55,28 @@ app.post("/render", async (req, res) => {
     else if (t.includes("space")) amb = AMBIENCE.space;
     else if (t.includes("magic") || t.includes("fairy")) amb = AMBIENCE.magic;
 
+    console.log("🎵 ambience:", amb);
     await fetch(`${ASSET_BASE_URL}/ambience/${amb}`)
       .then(r => r.arrayBuffer())
       .then(b => fs.writeFileSync(`${dir}/ambience.wav`, Buffer.from(b)));
 
+    console.log("✨ overlay");
     await fetch(`${ASSET_BASE_URL}/overlays/${OVERLAY}`)
       .then(r => r.arrayBuffer())
       .then(b => fs.writeFileSync(`${dir}/overlay.mp4`, Buffer.from(b)));
 
+    // -----------------------------
+    // FFmpeg setup
+    // -----------------------------
     const target = format === "9:16" ? "1080:1920" : "1920:1080";
-    const sceneSeconds = 6;
     const fps = 30;
+    const sceneSeconds = 6;
+    const maxDuration = 180; // HARD LIMIT
 
     const inputs =
       images.map((_, i) => `-loop 1 -t ${sceneSeconds} -i ${dir}/img${i}.jpg`).join(" ") +
-      ` -stream_loop -1 -i ${dir}/overlay.mp4` +
-      ` -stream_loop -1 -i ${dir}/ambience.wav` +
+      ` -i ${dir}/overlay.mp4` +
+      ` -i ${dir}/ambience.wav` +
       ` -i ${dir}/voice.wav`;
 
     const overlayIndex = images.length;
@@ -108,24 +120,36 @@ app.post("/render", async (req, res) => {
     const out = `${dir}/out.mp4`;
 
     const cmd =
-      `ffmpeg -y -r ${fps} ${inputs} ` +
+      `ffmpeg -y -t ${maxDuration} -r ${fps} ${inputs} ` +
       `-filter_complex "${filterComplex}" ` +
       `-map "[v]" -map "[a]" ` +
       `-shortest -pix_fmt yuv420p "${out}"`;
 
-    exec(cmd, { maxBuffer: 1024 * 1024 * 30 }, (err) => {
-      if (err) {
-        console.error(err);
+    console.log("🚀 FFmpeg start");
+
+    const ff = exec(cmd, { maxBuffer: 1024 * 1024 * 50 });
+
+    ff.stdout.on("data", d => console.log("FFmpeg:", d.toString()));
+    ff.stderr.on("data", d => console.log("FFmpeg:", d.toString()));
+
+    ff.on("close", code => {
+      console.log("🏁 FFmpeg exited:", code);
+
+      if (code !== 0) {
         return res.status(500).json({ error: "FFmpeg failed" });
       }
+
+      const buf = fs.readFileSync(out);
       res.setHeader("Content-Type", "video/mp4");
-      res.send(fs.readFileSync(out));
+      res.send(buf);
     });
 
   } catch (e) {
-    console.error(e);
+    console.error("🔥 server crash", e);
     res.status(500).json({ error: "server crash" });
   }
 });
 
-app.listen(8080, "0.0.0.0");
+app.listen(8080, "0.0.0.0", () => {
+  console.log("🎬 FFmpeg service running");
+});
