@@ -170,7 +170,7 @@ app.post("/render", async (req, res) => {
 
     if (useOverlay) {
       filter +=
-        `[${overlayIndex}:v]scale=${size}:force_original_aspect_ratio=increase,crop=${size},format=rgba,colorchannelmixer=aa=0.10[fx];` +
+        `[${overlayIndex}:v]scale=${size}:force_original_aspect_ratio=increase,crop=${size},format=rgba,colorchannelmixer=aa=0.20[fx];` +
         `[vbase][fx]overlay=shortest=1[v];`;
     } else {
       filter += `[vbase]copy[v];`;
