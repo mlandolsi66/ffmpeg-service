@@ -84,7 +84,7 @@ app.post("/render", async (req, res) => {
     await downloadTo(`${ASSET_BASE_URL}/ambience/${ambFile}`, `${dir}/ambience_raw.wav`);
 
     // IMPORTANT: your overlay file must be a NORMAL MP4 (H264/yuv420p/faststart)
-    await downloadTo(`${ASSET_BASE_URL}/overlays/sparkles_fixed.mp4`, `${dir}/sparkles.mp4`);
+    await downloadTo(`${ASSET_BASE_URL}/overlays/sparkles.mp4`, `${dir}/sparkles.mp4`);
 
     // 5) normalize ambience -> known-good wav (prevents “Invalid data found”)
     const ambFixed = `${dir}/ambience_fixed.wav`;
