@@ -249,8 +249,6 @@ app.post("/render", async (req, res) => {
     res.status(500).json({ error: "Server crash", details: String(e?.message || e) });
   }
 });
-console.log("🎧 Ambience:", ambienceFile);
-console.log("✨ Overlay:", overlayFile);
-console.log("📦 Asset base:", ASSET_BASE_URL);
+
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, "0.0.0.0", () => console.log(`🎬 FFmpeg service on :${PORT}`));
