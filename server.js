@@ -16,11 +16,24 @@ function pickAmbienceFilename(themeRaw) {
     "princess star dreams": "fairy.wav",
     "magic forest friends": "magic-forest-friends.wav",
     "dino explorer": "music-box-34179.wav",
-    "ocean wonders": "underwater.wav",
-    "space bedtime journey": "whitenoise-space.wav",//waves.wav
+    "ocean wonders": "waves.wav",
+    "space bedtime journey": "whitenoise-space.wav",
   };
 
   return map[theme] || null;
+}
+
+/* ------------------ OVERLAY POOL ------------------ */
+
+const OVERLAY_FILES = [
+  "sparkles.mp4",
+  "magic.mp4",
+  "dust_bokeh.mp4",
+  "light.mp4",
+];
+
+function pickRandomOverlay() {
+  return OVERLAY_FILES[Math.floor(Math.random() * OVERLAY_FILES.length)];
 }
 
 /* ------------------ HELPERS ------------------ */
@@ -32,7 +45,7 @@ async function downloadToFile(url, filepath) {
   }
   const buf = Buffer.from(await r.arrayBuffer());
   fs.writeFileSync(filepath, buf);
-  return { ok: true, status: r.status, contentType: r.headers.get("content-type") };
+  return { ok: true };
 }
 
 function looksLikeWav(filepath) {
@@ -45,6 +58,15 @@ function looksLikeWav(filepath) {
       header.toString("ascii", 0, 4) === "RIFF" &&
       header.toString("ascii", 8, 12) === "WAVE"
     );
+  } catch {
+    return false;
+  }
+}
+
+function ffprobeOk(filepath) {
+  try {
+    execSync(`ffprobe -v error "${filepath}"`);
+    return true;
   } catch {
     return false;
   }
@@ -82,18 +104,12 @@ app.post("/render", async (req, res) => {
     if (!ar.ok) return res.status(400).json({ error: "Audio download failed" });
     fs.writeFileSync(`${dir}/audio.wav`, Buffer.from(await ar.arrayBuffer()));
 
-    let audioDuration;
-    try {
-      audioDuration = ffprobeDuration(`${dir}/audio.wav`);
-    } catch {
-      return res.status(400).json({ error: "Invalid narration WAV" });
-    }
-
+    const audioDuration = ffprobeDuration(`${dir}/audio.wav`);
     const perImageDuration = audioDuration / images.length;
     const size = format === "9:16" ? "1080:1920" : "1920:1080";
     const out = `${dir}/out.mp4`;
 
-    /* ---------- OPTIONAL AMBIENCE ---------- */
+    /* ---------- AMBIENCE ---------- */
     const ASSET_BASE_URL = process.env.ASSET_BASE_URL;
     let useAmbience = false;
     let ambiencePath = `${dir}/ambience.wav`;
@@ -103,29 +119,26 @@ app.post("/render", async (req, res) => {
       if (ambFile) {
         const ambUrl = `${ASSET_BASE_URL}/ambience/${ambFile}`;
         const dl = await downloadToFile(ambUrl, ambiencePath);
-        if (dl.ok && looksLikeWav(ambiencePath)) {
-          try {
-            ffprobeDuration(ambiencePath);
-            useAmbience = true;
-          } catch {}
+        if (dl.ok && looksLikeWav(ambiencePath) && ffprobeOk(ambiencePath)) {
+          useAmbience = true;
         }
       }
     }
 
-    /* ---------- OPTIONAL OVERLAY ---------- */
+    /* ---------- RANDOM OVERLAY ---------- */
     let useOverlay = false;
     const overlayPath = `${dir}/overlay.mp4`;
 
     if (ASSET_BASE_URL) {
-      const overlayUrl = `${ASSET_BASE_URL}/overlays/sparkles.mp4`;
+      const overlayFile = pickRandomOverlay();
+      const overlayUrl = `${ASSET_BASE_URL}/overlays/${overlayFile}`;
       const dl = await downloadToFile(overlayUrl, overlayPath);
-      if (dl.ok) {
-        try {
-          execSync(`ffprobe -v error "${overlayPath}"`);
-          useOverlay = true;
-        } catch {
-          console.warn("⚠️ Overlay invalid, skipping");
-        }
+
+      if (dl.ok && ffprobeOk(overlayPath)) {
+        useOverlay = true;
+        console.log("✨ Overlay selected:", overlayFile);
+      } else {
+        console.warn("⚠️ Overlay failed, skipping:", overlayFile);
       }
     }
 
