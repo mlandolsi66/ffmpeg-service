@@ -2,7 +2,6 @@ import express from "express";
 import fetch from "node-fetch";
 import { exec } from "child_process";
 import fs from "fs";
-import path from "path";
 
 const app = express();
 app.use(express.json({ limit: "50mb" }));
@@ -34,32 +33,36 @@ app.post("/render", async (req, res) => {
 
     // concat list
     const perImageSeconds = 6;
-    const list = images
-      .map((_, i) => `file '${dir}/img${i}.jpg'\nduration ${perImageSeconds}`)
-      .join("\n");
-
+    let list = "";
+    for (let i = 0; i < images.length; i++) {
+      list += `file '${dir}/img${i}.jpg'\n`;
+      list += `duration ${perImageSeconds}\n`;
+    }
+    // concat demuxer requirement: repeat last frame
+    list += `file '${dir}/img${images.length - 1}.jpg'\n`;
     fs.writeFileSync(`${dir}/list.txt`, list);
 
-    const size =
-      format === "9:16" ? "1080x1920" : "1920x1080";
+    const W = format === "9:16" ? 1080 : 1920;
+    const H = format === "9:16" ? 1920 : 1080;
 
     const out = `${dir}/out.mp4`;
 
+    // IMPORTANT:
+    // - scale can be W:H (use colon)
+    // - crop MUST be W:H (use colon)  ✅ FIX
     const cmd = `
-ffmpeg -y \
+ffmpeg -y -hide_banner -loglevel error \
 -f concat -safe 0 -i ${dir}/list.txt \
 -i ${dir}/audio.wav \
--vf "scale=${size}:force_original_aspect_ratio=increase,crop=${size}" \
--r 30 \
--shortest \
--pix_fmt yuv420p \
+-vf "scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}" \
+-r 30 -shortest -pix_fmt yuv420p \
 ${out}
-`.trim();
+`.replace(/\s+/g, " ").trim();
 
-    exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, (err, stdout, stderr) => {
+    exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, (err, _stdout, stderr) => {
       if (err) {
-        console.error(stderr);
-        return res.status(500).json({ error: "FFmpeg failed" });
+        console.error("❌ FFmpeg failed:", stderr || err.message);
+        return res.status(500).json({ error: "FFmpeg failed", stderr: (stderr || "").slice(-1500) });
       }
 
       const buf = fs.readFileSync(out);
@@ -68,9 +71,11 @@ ${out}
     });
 
   } catch (e) {
-    console.error(e);
+    console.error("🔥 Server crash:", e);
     res.status(500).json({ error: "Server crash" });
   }
 });
 
-app.listen(8080, "0.0.0.0");
+app.listen(8080, "0.0.0.0", () => {
+  console.log("🎬 FFmpeg service running on 0.0.0.0:8080");
+});
