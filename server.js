@@ -1,86 +1,57 @@
 import express from "express";
 import fetch from "node-fetch";
-import { exec, execSync } from "child_process";
+import { exec } from "child_process";
 import fs from "fs";
 
 const app = express();
 app.use(express.json({ limit: "50mb" }));
 
-/* =====================================================
-   THEME → AMBIENCE
-===================================================== */
+/* ------------------ THEME → AMBIENCE ------------------ */
 
 function pickAmbienceFilename(themeRaw) {
   const theme = String(themeRaw || "").toLowerCase();
-  const map = {
-    "fairy": "fairy-garden-adventure.wav",
-    "princess": "fairy.wav",
-    "forest": "magic-forest-friends.wav",
-    "dino": "music-box-34179.wav",
-    "ocean": "waves.wav",
-    "space": "whitenoise-space.wav"
-  };
-
-  for (const key in map) {
-    if (theme.includes(key)) return map[key];
-  }
+  if (theme.includes("ocean")) return "waves.wav";
+  if (theme.includes("space")) return "whitenoise-space.wav";
+  if (theme.includes("dino")) return "music-box-34179.wav";
   return null;
 }
 
-/* =====================================================
-   THEME → OVERLAY (SAFE MAPPING)
-===================================================== */
+/* ------------------ OVERLAY PICKER ------------------ */
 
-function pickOverlay(themeRaw, format) {
-  const theme = String(themeRaw || "").toLowerCase();
+function pickOverlay(format) {
+  // folders:
+  // /overlays/16x9/*
+  // /overlays/9x16/*
+  const base = process.env.ASSET_BASE_URL;
+  if (!base) return null;
 
-  const overlays9x16 = {
-    ocean: "bokeh.mp4",
-    space: "lights.mp4",
-    fairy: "dust.mp4",
-    princess: "blue-pink-powder.mp4",
-    default: "bokeh.mp4"
-  };
+  const folder = format === "9:16" ? "9x16" : "16x9";
+  const files =
+    format === "9:16"
+      ? ["dust.mp4", "bokeh.mp4", "lights.mp4", "blue-pink-powder.mp4"]
+      : ["sparkles.mp4", "magic.mp4", "dust_bokeh.mp4", "light.mp4"];
 
-  const overlays16x9 = {
-    ocean: "sparkles.mp4",
-    space: "light.mp4",
-    fairy: "magic.mp4",
-    princess: "dust_bokeh.mp4",
-    default: "sparkles.mp4"
-  };
-
-  const map = format === "9:16" ? overlays9x16 : overlays16x9;
-
-  for (const key in map) {
-    if (theme.includes(key)) return map[key];
-  }
-
-  return map.default;
+  const file = files[Math.floor(Math.random() * files.length)];
+  return `${base}/overlays/${folder}/${file}`;
 }
 
-/* =====================================================
-   HELPERS
-===================================================== */
+/* ------------------ HELPERS ------------------ */
 
-async function downloadToFile(url, filepath) {
+async function download(url, path) {
   const r = await fetch(url);
-  if (!r.ok) return false;
-  fs.writeFileSync(filepath, Buffer.from(await r.arrayBuffer()));
-  return true;
+  if (!r.ok) throw new Error("Download failed");
+  fs.writeFileSync(path, Buffer.from(await r.arrayBuffer()));
 }
 
-function ffprobeDuration(file) {
+function duration(file) {
   return parseFloat(
-    execSync(
-      `ffprobe -v error -show_entries format=duration -of csv=p=0 "${file}"`
-    ).toString().trim()
+    exec(`ffprobe -v error -show_entries format=duration -of csv=p=0 "${file}"`)
+      .toString()
+      .trim()
   );
 }
 
-/* =====================================================
-   RENDER ENDPOINT
-===================================================== */
+/* ------------------ RENDER ------------------ */
 
 app.post("/render", async (req, res) => {
   try {
@@ -92,70 +63,73 @@ app.post("/render", async (req, res) => {
     const dir = `/tmp/${videoId}`;
     fs.mkdirSync(dir, { recursive: true });
 
-    /* ---------- DOWNLOAD IMAGES ---------- */
+    /* -------- DOWNLOAD IMAGES -------- */
     for (let i = 0; i < images.length; i++) {
-      const r = await fetch(images[i]);
-      if (!r.ok) throw new Error("Image download failed");
-      fs.writeFileSync(`${dir}/img${i}.jpg`, Buffer.from(await r.arrayBuffer()));
+      await download(images[i], `${dir}/img${i}.jpg`);
     }
 
-    /* ---------- DOWNLOAD AUDIO ---------- */
-    const ar = await fetch(audioUrl);
-    if (!ar.ok) throw new Error("Audio download failed");
-    fs.writeFileSync(`${dir}/audio.wav`, Buffer.from(await ar.arrayBuffer()));
-
-    const audioDuration = ffprobeDuration(`${dir}/audio.wav`);
-    const perImage = audioDuration / images.length;
-    const fade = 1.0;
+    /* -------- DOWNLOAD AUDIO -------- */
+    await download(audioUrl, `${dir}/voice.wav`);
+    const voiceDuration = duration(`${dir}/voice.wav`);
+    const perImage = voiceDuration / images.length;
+    const fade = 1;
 
     const size = format === "9:16" ? "1080:1920" : "1920:1080";
     const [W, H] = size.split(":");
-    const out = `${dir}/out.mp4`;
 
-    /* ---------- AMBIENCE ---------- */
-    let useAmbience = false;
-    const ambiencePath = `${dir}/ambience.wav`;
+    /* -------- AMBIENCE -------- */
+    let ambienceInput = "";
+    let ambienceFilter = "";
     const ambFile = pickAmbienceFilename(theme);
 
-    if (ambFile && process.env.ASSET_BASE_URL) {
-      const ok = await downloadToFile(
-        `${process.env.ASSET_BASE_URL}/ambience/${ambFile}`,
-        ambiencePath
-      );
-      useAmbience = ok;
+    if (ambFile) {
+      const ambPath = `${dir}/amb.wav`;
+      await download(`${process.env.ASSET_BASE_URL}/ambience/${ambFile}`, ambPath);
+      ambienceInput = ` -stream_loop -1 -i "${ambPath}"`;
+      ambienceFilter = `;[a0][a1]amix=inputs=2:duration=first[a]`;
     }
 
-    /* ---------- OVERLAY ---------- */
-    let useOverlay = false;
-    const overlayPath = `${dir}/overlay.mp4`;
-    const overlayFile = pickOverlay(theme, format);
+    /* -------- OVERLAY -------- */
+    let overlayInput = "";
+    let overlayFilter = "";
+    const overlayUrl = pickOverlay(format);
 
-    if (overlayFile && process.env.ASSET_BASE_URL) {
-      const ok = await downloadToFile(
-        `${process.env.ASSET_BASE_URL}/overlays/${format}/${overlayFile}`,
-        overlayPath
-      );
-      useOverlay = ok;
+    if (overlayUrl) {
+      const overlayRaw = `${dir}/overlay_raw.mp4`;
+      const overlayClean = `${dir}/overlay.mp4`;
+
+      await download(overlayUrl, overlayRaw);
+
+      // normalize overlay
+      exec(`
+        ffmpeg -y -i "${overlayRaw}" \
+        -vf "scale=${W}:${H},format=rgba" \
+        -pix_fmt yuva420p \
+        "${overlayClean}"
+      `);
+
+      overlayInput = ` -stream_loop -1 -i "${overlayClean}"`;
+      overlayFilter =
+        `;[vbase][vover]overlay=shortest=1:format=auto,format=yuv420p[v]`;
     }
 
-    /* ---------- INPUTS ---------- */
+    /* -------- INPUTS -------- */
     const imageInputs = images
       .map((_, i) => `-loop 1 -t ${perImage} -i "${dir}/img${i}.jpg"`)
       .join(" ");
 
     const inputs =
       imageInputs +
-      ` -i "${dir}/audio.wav"` +
-      (useAmbience ? ` -stream_loop -1 -i "${ambiencePath}"` : "") +
-      (useOverlay ? ` -stream_loop -1 -i "${overlayPath}"` : "");
+      ` -i "${dir}/voice.wav"` +
+      ambienceInput +
+      overlayInput;
 
-    /* ---------- FILTER GRAPH ---------- */
-    const filters = [];
+    /* -------- FILTER GRAPH -------- */
+    let filters = [];
 
     images.forEach((_, i) => {
       filters.push(
-        `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,` +
-        `crop=${W}:${H},setpts=PTS-STARTPTS[v${i}]`
+        `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setpts=PTS-STARTPTS[v${i}]`
       );
     });
 
@@ -164,43 +138,49 @@ app.post("/render", async (req, res) => {
 
     for (let i = 1; i < images.length; i++) {
       filters.push(
-        `[${last}][v${i}]xfade=transition=fade:duration=${fade}:offset=${offset}[vx${i}]`
+        `[${last}][v${i}]xfade=transition=fade:duration=${fade}:offset=${offset}[vxf${i}]`
       );
-      last = `vx${i}`;
+      last = `vxf${i}`;
       offset += perImage;
     }
 
-    let filter = filters.join(";");
+    filters.push(`[${last}]format=rgba[vbase]`);
 
-    if (useOverlay) {
-      const overlayIndex = images.length + (useAmbience ? 2 : 1);
-      filter +=
-        `;[${last}]format=rgba[base]` +
-        `;[${overlayIndex}:v]scale=${W}:${H},format=rgba,colorchannelmixer=aa=0.45[fx]` +
-        `;[base][fx]overlay=shortest=1,format=yuv420p[v]`;
+    const audioBase = images.length;
+    const audioAmb = images.length + 1;
+    const overlayIndex = images.length + (ambienceInput ? 2 : 1);
+
+    let audioFilter = `[${audioBase}:a]anull[a0]`;
+    if (ambienceInput) {
+      audioFilter =
+        `[${audioBase}:a][${audioAmb}:a]amix=inputs=2:weights=1 0.2[a]`;
     } else {
-      filter += `;[${last}]format=yuv420p[v]`;
+      audioFilter = `[${audioBase}:a]anull[a]`;
     }
 
-    if (useAmbience) {
-      filter +=
-        `;[${images.length + 1}:a]volume=0.2[amb]` +
-        `;[${images.length}:a][amb]amix=inputs=2:duration=first[a]`;
-    } else {
-      filter += `;[${images.length}:a]anull[a]`;
-    }
+    const filterComplex =
+      filters.join(";") +
+      overlayFilter +
+      ";" +
+      audioFilter;
 
-    /* ---------- EXEC ---------- */
-    const cmd =
-      `ffmpeg -y ${inputs} ` +
-      `-filter_complex "${filter}" ` +
-      `-map "[v]" -map "[a]" -shortest -r 30 ` +
-      `-c:v libx264 -preset veryfast -crf 28 -pix_fmt yuv420p -movflags +faststart ` +
-      `-c:a aac -b:a 128k "${out}"`;
+    const out = `${dir}/out.mp4`;
 
-    exec(cmd, { maxBuffer: 1024 * 1024 * 50 }, (err, _o, stderr) => {
+    const cmd = `
+      ffmpeg -y ${inputs}
+      -filter_complex "${filterComplex}"
+      -map "[v]" -map "[a]"
+      -r 30 -shortest
+      -c:v libx264 -preset veryfast -crf 26
+      -pix_fmt yuv420p
+      -c:a aac -b:a 128k
+      -movflags +faststart
+      "${out}"
+    `;
+
+    exec(cmd, (err, _stdout, stderr) => {
       if (err) {
-        console.error("❌ FFmpeg failed:", stderr);
+        console.error("❌ FFmpeg STDERR:", stderr);
         return res.status(500).json({ error: "FFmpeg failed" });
       }
       res.setHeader("Content-Type", "video/mp4");
@@ -208,7 +188,7 @@ app.post("/render", async (req, res) => {
     });
 
   } catch (e) {
-    console.error("🔥 Server crash:", e);
+    console.error(e);
     res.status(500).json({ error: "Server crash" });
   }
 });
