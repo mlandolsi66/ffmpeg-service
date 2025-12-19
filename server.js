@@ -32,7 +32,7 @@ function pickRandomOverlay() {
 
 async function downloadToFile(url, filepath) {
   const r = await fetch(url);
-  if (!r.ok) return { ok: false };
+  if (!r.ok) return { ok: false, status: r.status };
   fs.writeFileSync(filepath, Buffer.from(await r.arrayBuffer()));
   return { ok: true };
 }
@@ -71,23 +71,39 @@ function ffprobeDuration(filepath) {
   );
 }
 
-/* ------------------ ASSETS CHECK ------------------ */
+/**
+ * Normalize overlay into a clean, decodable H.264 stream:
+ * - strip audio (-an)
+ * - force size + yuv420p
+ * - re-encode to baseline H.264 for max compatibility
+ */
+function normalizeOverlay(rawPath, cleanPath, W, H) {
+  execSync(
+    `ffmpeg -y -v error -i "${rawPath}" -an ` +
+      `-vf "scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},format=yuv420p" ` +
+      `-c:v libx264 -profile:v baseline -level 3.0 -pix_fmt yuv420p ` +
+      `"${cleanPath}"`
+  );
+}
 
-app.get("/debug-overlay", async (req, res) => {
-  const file = "/tmp/test-overlay.mp4";
+/* ------------------ DEBUG ENDPOINT ------------------ */
 
-  await fetch(process.env.ASSET_BASE_URL + "/overlays/sparkles.mp4")
-    .then(r => r.arrayBuffer())
-    .then(b => fs.writeFileSync(file, Buffer.from(b)));
-
+app.get("/debug-overlay", async (_req, res) => {
   try {
+    const ASSET_BASE_URL = process.env.ASSET_BASE_URL;
+    if (!ASSET_BASE_URL) return res.status(400).send("ASSET_BASE_URL missing");
+
+    const file = "/tmp/test-overlay.mp4";
+    await fetch(`${ASSET_BASE_URL}/overlays/sparkles.mp4`)
+      .then((r) => r.arrayBuffer())
+      .then((b) => fs.writeFileSync(file, Buffer.from(b)));
+
     const info = execSync(`ffprobe "${file}"`).toString();
     res.type("text").send(info);
-  } catch (e) {
+  } catch {
     res.status(500).send("ffprobe failed");
   }
 });
-
 
 /* ------------------ RENDER ------------------ */
 
@@ -114,8 +130,12 @@ app.post("/render", async (req, res) => {
     fs.writeFileSync(`${dir}/audio.wav`, Buffer.from(await ar.arrayBuffer()));
 
     const audioDuration = ffprobeDuration(`${dir}/audio.wav`);
+    if (!audioDuration || audioDuration < 1) {
+      return res.status(400).json({ error: "Invalid audio duration" });
+    }
+
     const perImage = audioDuration / images.length;
-    const fade = 1.2;
+    const fade = 1.2; // your choice
 
     const size = format === "9:16" ? "1080:1920" : "1920:1080";
     const [W, H] = size.split(":");
@@ -137,16 +157,31 @@ app.post("/render", async (req, res) => {
       }
     }
 
-    /* ---------- OVERLAY ---------- */
+    /* ---------- OVERLAY (HARDENED) ---------- */
     let useOverlay = false;
-    const overlayPath = `${dir}/overlay.mp4`;
+    const overlayRawPath = `${dir}/overlay_raw.mp4`;
+    const overlayCleanPath = `${dir}/overlay_clean.mp4`;
 
     if (ASSET_BASE_URL) {
       const overlayFile = pickRandomOverlay();
       const overlayUrl = `${ASSET_BASE_URL}/overlays/${overlayFile}`;
-      const dl = await downloadToFile(overlayUrl, overlayPath);
-      if (dl.ok && ffprobeOk(overlayPath)) {
-        useOverlay = true;
+      const dl = await downloadToFile(overlayUrl, overlayRawPath);
+
+      if (dl.ok && ffprobeOk(overlayRawPath)) {
+        try {
+          // normalize to clean H.264
+          normalizeOverlay(overlayRawPath, overlayCleanPath, W, H);
+          if (ffprobeOk(overlayCleanPath)) {
+            useOverlay = true;
+            console.log("✨ Overlay OK (normalized):", overlayFile);
+          } else {
+            console.warn("⚠️ Overlay normalize failed (ffprobe):", overlayFile);
+          }
+        } catch (e) {
+          console.warn("⚠️ Overlay normalize crashed, skipping:", overlayFile);
+        }
+      } else {
+        console.warn("⚠️ Overlay download/ffprobe failed, skipping:", overlayFile);
       }
     }
 
@@ -155,11 +190,14 @@ app.post("/render", async (req, res) => {
       .map((_, i) => `-loop 1 -t ${perImage} -i "${dir}/img${i}.jpg"`)
       .join(" ");
 
+    // IMPORTANT:
+    // - ambience can be looped
+    // - overlay should NOT be stream_looped (decoder stability)
     const inputs =
       imageInputs +
       ` -i "${dir}/audio.wav"` +
       (useAmbience ? ` -stream_loop -1 -i "${ambiencePath}"` : "") +
-      (useOverlay ? ` -stream_loop -1 -i "${overlayPath}"` : "");
+      (useOverlay ? ` -i "${overlayCleanPath}"` : "");
 
     /* ---------- FILTER GRAPH ---------- */
     let filters = [];
@@ -167,7 +205,7 @@ app.post("/render", async (req, res) => {
     images.forEach((_, i) => {
       filters.push(
         `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,` +
-        `crop=${W}:${H},setpts=PTS-STARTPTS[v${i}]`
+          `crop=${W}:${H},setpts=PTS-STARTPTS[v${i}]`
       );
     });
 
@@ -186,10 +224,13 @@ app.post("/render", async (req, res) => {
 
     if (useOverlay) {
       const overlayIndex = images.length + (useAmbience ? 2 : 1);
+
+      // loop overlay visually inside the filter graph with tpad (safe)
       filter +=
-        `;[${last}]format=rgba[base];` +
-        `[${overlayIndex}:v]scale=${W}:${H},format=rgba,colorchannelmixer=aa=0.18[fx];` +
-        `[base][fx]overlay=shortest=1,format=yuv420p[v]`;
+        `;[${last}]format=rgba[base]` +
+        `;[${overlayIndex}:v]format=rgba,scale=${W}:${H},colorchannelmixer=aa=0.18,` +
+        `tpad=stop_mode=clone:stop_duration=${Math.ceil(audioDuration)}[fx]` +
+        `;[base][fx]overlay=shortest=1,format=yuv420p[v]`;
     } else {
       filter += `;[${last}]format=yuv420p[v]`;
     }
@@ -219,7 +260,6 @@ app.post("/render", async (req, res) => {
       res.setHeader("Content-Type", "video/mp4");
       res.send(fs.readFileSync(out));
     });
-
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "Server crash" });
