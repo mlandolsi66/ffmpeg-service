@@ -10,7 +10,6 @@ app.use(express.json({ limit: "50mb" }));
 
 function pickAmbienceFilename(themeRaw) {
   const theme = String(themeRaw || "").trim().toLowerCase();
-
   const map = {
     "fairy garden adventure": "fairy-garden-adventure.wav",
     "princess star dreams": "fairy.wav",
@@ -19,7 +18,6 @@ function pickAmbienceFilename(themeRaw) {
     "ocean wonders": "waves.wav",
     "space bedtime journey": "whitenoise-space.wav",
   };
-
   return map[theme] || null;
 }
 
@@ -84,7 +82,6 @@ function ffprobeDuration(filepath) {
 app.post("/render", async (req, res) => {
   try {
     const { videoId, images, audioUrl, format, theme } = req.body;
-
     if (!videoId || !images?.length || !audioUrl) {
       return res.status(400).json({ error: "Missing inputs" });
     }
@@ -109,13 +106,12 @@ app.post("/render", async (req, res) => {
       return res.status(400).json({ error: "Invalid audio duration" });
     }
 
-    const perImageDuration = Math.max(audioDuration / images.length, 0.8);
     const fps = 30;
-    const frames = Math.round(perImageDuration * fps);
+    const perImage = Math.max(audioDuration / images.length, 0.8);
+    const frames = Math.round(perImage * fps);
 
     const size = format === "9:16" ? "1080:1920" : "1920:1080";
     const [W, H] = size.split(":");
-
     const out = `${dir}/out.mp4`;
 
     /* ---------- AMBIENCE ---------- */
@@ -144,7 +140,6 @@ app.post("/render", async (req, res) => {
       const dl = await downloadToFile(overlayUrl, overlayPath);
       if (dl.ok && ffprobeOk(overlayPath)) {
         useOverlay = true;
-        console.log("✨ Overlay:", overlayFile);
       }
     }
 
@@ -159,14 +154,14 @@ app.post("/render", async (req, res) => {
       (useAmbience ? ` -stream_loop -1 -i "${ambiencePath}"` : "") +
       (useOverlay ? ` -stream_loop -1 -i "${overlayPath}"` : "");
 
-    /* ---------- FILTER GRAPH (soft zoom) ---------- */
-    const zoomExpr = "min(zoom+0.0015,1.06)";
+    /* ---------- FILTER GRAPH (SAFE ZOOM) ---------- */
+    const zoomExpr = "1+0.0015*on";
 
     const vFilters = images
       .map(
         (_, i) =>
           `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},` +
-          `zoompan=z='if(lte(on,1),1.0,${zoomExpr})':d=${frames}:s=${W}x${H}:fps=${fps},` +
+          `zoompan=z='${zoomExpr}':d=${frames}:s=${W}x${H}:fps=${fps},` +
           `format=rgba[v${i}]`
       )
       .join(";");
@@ -177,9 +172,10 @@ app.post("/render", async (req, res) => {
       `${concatInputs}concat=n=${images.length}:v=1:a=0[vbase];`;
 
     if (useOverlay) {
+      const overlayIndex = images.length + (useAmbience ? 2 : 1);
       filter +=
         `[vbase]format=rgba[base];` +
-        `[${images.length + (useAmbience ? 2 : 1)}:v]scale=${W}:${H},format=rgba,colorchannelmixer=aa=0.18[fx];` +
+        `[${overlayIndex}:v]scale=${W}:${H},format=rgba,colorchannelmixer=aa=0.18[fx];` +
         `[base][fx]overlay=shortest=1:format=auto,format=yuv420p[v];`;
     } else {
       filter += `[vbase]format=yuv420p[v];`;
@@ -203,6 +199,7 @@ app.post("/render", async (req, res) => {
 
     exec(cmd, { maxBuffer: 1024 * 1024 * 50 }, (err) => {
       if (err) {
+        console.error("FFmpeg error");
         return res.status(500).json({ error: "FFmpeg failed" });
       }
       res.setHeader("Content-Type", "video/mp4");
