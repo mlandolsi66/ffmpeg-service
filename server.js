@@ -106,13 +106,14 @@ app.post("/render", async (req, res) => {
 
     const audioDuration = ffprobeDuration(`${dir}/audio.wav`);
     const perImageDuration = audioDuration / images.length;
+
     const size = format === "9:16" ? "1080:1920" : "1920:1080";
     const out = `${dir}/out.mp4`;
 
     /* ---------- AMBIENCE ---------- */
     const ASSET_BASE_URL = process.env.ASSET_BASE_URL;
     let useAmbience = false;
-    let ambiencePath = `${dir}/ambience.wav`;
+    const ambiencePath = `${dir}/ambience.wav`;
 
     if (ASSET_BASE_URL) {
       const ambFile = pickAmbienceFilename(theme);
@@ -166,19 +167,24 @@ app.post("/render", async (req, res) => {
     const ambienceIndex = images.length + 1;
     const overlayIndex = images.length + (useAmbience ? 2 : 1);
 
+    // Base video
     let filter = `${vFilters};${concatInputs}concat=n=${images.length}:v=1:a=0[vbase];`;
 
+    // ✅ SAFE overlay compositing
     if (useOverlay) {
       filter +=
-        `[${overlayIndex}:v]scale=${size}:force_original_aspect_ratio=increase,crop=${size},format=rgba,colorchannelmixer=aa=0.20[fx];` +
-        `[vbase][fx]overlay=shortest=1[v];`;
+        `[vbase]format=rgba[base_rgba];` +
+        `[${overlayIndex}:v]scale=${size}:force_original_aspect_ratio=increase,crop=${size},format=rgba,colorchannelmixer=aa=0.18[fx];` +
+        `[base_rgba][fx]overlay=shortest=1:format=auto,format=yuv420p[v];`;
     } else {
-      filter += `[vbase]copy[v];`;
+      // ✅ no "copy" filter; always output a stable format
+      filter += `[vbase]format=yuv420p[v];`;
     }
 
+    // Audio mix
     if (useAmbience) {
       filter +=
-        `[${ambienceIndex}:a]volume=0.18[amb];` +
+        `[${ambienceIndex}:a]volume=0.20[amb];` +
         `[${narrationIndex}:a][amb]amix=inputs=2:duration=first[a]`;
     } else {
       filter += `[${narrationIndex}:a]acopy[a]`;
@@ -193,7 +199,7 @@ app.post("/render", async (req, res) => {
       `-c:v libx264 -crf 28 -preset veryfast -pix_fmt yuv420p -movflags +faststart ` +
       `-c:a aac -b:a 128k "${out}"`;
 
-    exec(cmd, { maxBuffer: 1024 * 1024 * 20 }, (err, _, stderr) => {
+    exec(cmd, { maxBuffer: 1024 * 1024 * 50 }, (err, _stdout, stderr) => {
       if (err) {
         console.error(stderr);
         return res.status(500).json({ error: "FFmpeg failed" });
@@ -201,7 +207,6 @@ app.post("/render", async (req, res) => {
       res.setHeader("Content-Type", "video/mp4");
       res.send(fs.readFileSync(out));
     });
-
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "Server crash" });
