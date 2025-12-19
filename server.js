@@ -176,7 +176,7 @@ app.post("/render", async (req, res) => {
       const overlayIndex = images.length + (useAmbience ? 2 : 1);
       filter +=
         `;[${last}]format=rgba[base]` +
-        `;[${overlayIndex}:v]scale=${W}:${H},format=rgba,colorchannelmixer=aa=0.18[fx]` +
+        `;[${overlayIndex}:v]scale=${W}:${H},format=rgba,colorchannelmixer=aa=0.45[fx]` +
         `;[base][fx]overlay=shortest=1,format=yuv420p[v]`;
     } else {
       filter += `;[${last}]format=yuv420p[v]`;
