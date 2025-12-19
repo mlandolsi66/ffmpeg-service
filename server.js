@@ -101,6 +101,10 @@ app.post("/render", async (req, res) => {
     }
 
     const perImage = Math.max(audioDuration / images.length, 0.8);
+    const fps = 30;
+    const frames = Math.round(perImage * fps);
+    const half = Math.floor(frames / 2);
+
     const size = format === "9:16" ? "1080:1920" : "1920:1080";
     const [W, H] = size.split(":");
     const out = `${dir}/out.mp4`;
@@ -136,7 +140,7 @@ app.post("/render", async (req, res) => {
 
     /* ---------- INPUTS ---------- */
     const imageInputs = images
-      .map((_, i) => `-loop 1 -t ${perImage} -i "${dir}/img${i}.jpg"`)
+      .map((_, i) => `-loop 1 -i "${dir}/img${i}.jpg"`)
       .join(" ");
 
     const inputs =
@@ -145,19 +149,15 @@ app.post("/render", async (req, res) => {
       (useAmbience ? ` -stream_loop -1 -i "${ambiencePath}"` : "") +
       (useOverlay ? ` -stream_loop -1 -i "${overlayPath}"` : "");
 
-    /* ---------- FILTER GRAPH (NO ZOOM) ---------- */
+    /* ---------- FILTER GRAPH (ZOOM IN → OUT) ---------- */
     const vFilters = images
       .map(
         (_, i) =>
-          const half = Math.floor(frames / 2);
-
           `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,` +
           `crop=${W}:${H},` +
-          `zoompan=` +
-          `z='if(lte(on,${half}),1+0.06*on/${half},1.06-0.06*(on-${half})/(${frames}-${half}))':` +
-          `d=${frames}:s=${W}x${H}:fps=30,` +
+          `zoompan=z='if(lte(on,${half}),1+0.06*on/${half},1.06-0.06*(on-${half})/(${frames}-${half}))':` +
+          `d=${frames}:s=${W}x${H}:fps=${fps},` +
           `setpts=PTS-STARTPTS[v${i}]`
-
       )
       .join(";");
 
@@ -189,7 +189,7 @@ app.post("/render", async (req, res) => {
     const cmd =
       `ffmpeg -y ${inputs} ` +
       `-filter_complex "${filter}" ` +
-      `-map "[v]" -map "[a]" -shortest -r 30 ` +
+      `-map "[v]" -map "[a]" -shortest -r ${fps} ` +
       `-c:v libx264 -preset veryfast -crf 28 -pix_fmt yuv420p -movflags +faststart ` +
       `-c:a aac -b:a 128k "${out}"`;
 
@@ -201,6 +201,7 @@ app.post("/render", async (req, res) => {
       res.setHeader("Content-Type", "video/mp4");
       res.send(fs.readFileSync(out));
     });
+
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "Server crash" });
