@@ -100,10 +100,7 @@ app.post("/render", async (req, res) => {
       return res.status(400).json({ error: "Invalid audio duration" });
     }
 
-    const fps = 30;
     const perImage = Math.max(audioDuration / images.length, 0.8);
-    const frames = Math.round(perImage * fps);
-
     const size = format === "9:16" ? "1080:1920" : "1920:1080";
     const [W, H] = size.split(":");
     const out = `${dir}/out.mp4`;
@@ -139,7 +136,7 @@ app.post("/render", async (req, res) => {
 
     /* ---------- INPUTS ---------- */
     const imageInputs = images
-      .map((_, i) => `-loop 1 -i "${dir}/img${i}.jpg"`)
+      .map((_, i) => `-loop 1 -t ${perImage} -i "${dir}/img${i}.jpg"`)
       .join(" ");
 
     const inputs =
@@ -148,19 +145,17 @@ app.post("/render", async (req, res) => {
       (useAmbience ? ` -stream_loop -1 -i "${ambiencePath}"` : "") +
       (useOverlay ? ` -stream_loop -1 -i "${overlayPath}"` : "");
 
-    /* ---------- FILTER GRAPH ---------- */
-    const zoomExpr = "1+0.0015*on";
-
+    /* ---------- FILTER GRAPH (NO ZOOM) ---------- */
     const vFilters = images
       .map(
         (_, i) =>
-          `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},` +
-          `zoompan=z='${zoomExpr}':d=${frames}:s=${W}x${H}:fps=${fps},` +
-          `format=rgba[v${i}]`
+          `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,` +
+          `crop=${W}:${H},setpts=PTS-STARTPTS[v${i}]`
       )
       .join(";");
 
     const concatInputs = images.map((_, i) => `[v${i}]`).join("");
+
     let filter =
       `${vFilters};` +
       `${concatInputs}concat=n=${images.length}:v=1:a=0[vbase];`;
@@ -187,13 +182,13 @@ app.post("/render", async (req, res) => {
     const cmd =
       `ffmpeg -y ${inputs} ` +
       `-filter_complex "${filter}" ` +
-      `-map "[v]" -map "[a]" -shortest -r ${fps} ` +
+      `-map "[v]" -map "[a]" -shortest -r 30 ` +
       `-c:v libx264 -preset veryfast -crf 28 -pix_fmt yuv420p -movflags +faststart ` +
       `-c:a aac -b:a 128k "${out}"`;
 
-    exec(cmd, { maxBuffer: 1024 * 1024 * 50 }, (err) => {
+    exec(cmd, { maxBuffer: 1024 * 1024 * 50 }, (err, _stdout, stderr) => {
       if (err) {
-        console.error("❌ FFmpeg failed");
+        console.error("❌ FFmpeg STDERR:", stderr);
         return res.status(500).json({ error: "FFmpeg failed" });
       }
       res.setHeader("Content-Type", "video/mp4");
