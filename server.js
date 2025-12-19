@@ -6,88 +6,81 @@ import fs from "fs";
 const app = express();
 app.use(express.json({ limit: "50mb" }));
 
-/* ------------------ THEME → AMBIENCE ------------------ */
+/* =====================================================
+   THEME → AMBIENCE
+===================================================== */
 
 function pickAmbienceFilename(themeRaw) {
-  const theme = String(themeRaw || "").trim().toLowerCase();
+  const theme = String(themeRaw || "").toLowerCase();
   const map = {
-    "fairy garden adventure": "fairy-garden-adventure.wav",
-    "princess star dreams": "fairy.wav",
-    "magic forest friends": "magic-forest-friends.wav",
-    "dino explorer": "music-box-34179.wav",
-    "ocean wonders": "waves.wav",
-    "space bedtime journey": "whitenoise-space.wav",
+    "fairy": "fairy-garden-adventure.wav",
+    "princess": "fairy.wav",
+    "forest": "magic-forest-friends.wav",
+    "dino": "music-box-34179.wav",
+    "ocean": "waves.wav",
+    "space": "whitenoise-space.wav"
   };
-  return map[theme] || null;
+
+  for (const key in map) {
+    if (theme.includes(key)) return map[key];
+  }
+  return null;
 }
 
-/* ------------------ OVERLAY POOL ------------------ */
+/* =====================================================
+   THEME → OVERLAY (SAFE MAPPING)
+===================================================== */
 
-const OVERLAY_FILES = ["sparkles.mp4", "magic.mp4", "dust_bokeh.mp4", "light.mp4"];
-function pickRandomOverlay() {
-  return OVERLAY_FILES[Math.floor(Math.random() * OVERLAY_FILES.length)];
+function pickOverlay(themeRaw, format) {
+  const theme = String(themeRaw || "").toLowerCase();
+
+  const overlays9x16 = {
+    ocean: "bokeh.mp4",
+    space: "lights.mp4",
+    fairy: "dust.mp4",
+    princess: "blue-pink-powder.mp4",
+    default: "bokeh.mp4"
+  };
+
+  const overlays16x9 = {
+    ocean: "sparkles.mp4",
+    space: "light.mp4",
+    fairy: "magic.mp4",
+    princess: "dust_bokeh.mp4",
+    default: "sparkles.mp4"
+  };
+
+  const map = format === "9:16" ? overlays9x16 : overlays16x9;
+
+  for (const key in map) {
+    if (theme.includes(key)) return map[key];
+  }
+
+  return map.default;
 }
 
-/* ------------------ HELPERS ------------------ */
+/* =====================================================
+   HELPERS
+===================================================== */
 
 async function downloadToFile(url, filepath) {
   const r = await fetch(url);
-  if (!r.ok) return { ok: false, status: r.status };
+  if (!r.ok) return false;
   fs.writeFileSync(filepath, Buffer.from(await r.arrayBuffer()));
-  return { ok: true };
+  return true;
 }
 
-function looksLikeWav(filepath) {
-  try {
-    const fd = fs.openSync(filepath, "r");
-    const header = Buffer.alloc(12);
-    fs.readSync(fd, header, 0, 12, 0);
-    fs.closeSync(fd);
-    return (
-      header.toString("ascii", 0, 4) === "RIFF" &&
-      header.toString("ascii", 8, 12) === "WAVE"
-    );
-  } catch {
-    return false;
-  }
-}
-
-function ffprobeOk(filepath) {
-  try {
-    execSync(`ffprobe -v error "${filepath}"`, { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function ffprobeDuration(filepath) {
+function ffprobeDuration(file) {
   return parseFloat(
     execSync(
-      `ffprobe -v error -show_entries format=duration -of csv=p=0 "${filepath}"`
-    )
-      .toString()
-      .trim()
+      `ffprobe -v error -show_entries format=duration -of csv=p=0 "${file}"`
+    ).toString().trim()
   );
 }
 
-/**
- * Normalize overlay to be safe:
- * - no audio
- * - constant fps=30
- * - correct size
- * - yuv420p baseline
- */
-function normalizeOverlay(rawPath, cleanPath, W, H) {
-  execSync(
-    `ffmpeg -y -v error -i "${rawPath}" -an ` +
-      `-vf "fps=30,scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},format=yuv420p" ` +
-      `-c:v libx264 -profile:v baseline -level 3.0 -pix_fmt yuv420p -movflags +faststart ` +
-      `"${cleanPath}"`
-  );
-}
-
-/* ------------------ RENDER ------------------ */
+/* =====================================================
+   RENDER ENDPOINT
+===================================================== */
 
 app.post("/render", async (req, res) => {
   try {
@@ -99,73 +92,50 @@ app.post("/render", async (req, res) => {
     const dir = `/tmp/${videoId}`;
     fs.mkdirSync(dir, { recursive: true });
 
-    /* ---------- IMAGES ---------- */
+    /* ---------- DOWNLOAD IMAGES ---------- */
     for (let i = 0; i < images.length; i++) {
       const r = await fetch(images[i]);
-      if (!r.ok) return res.status(400).json({ error: "Image download failed" });
+      if (!r.ok) throw new Error("Image download failed");
       fs.writeFileSync(`${dir}/img${i}.jpg`, Buffer.from(await r.arrayBuffer()));
     }
 
-    /* ---------- AUDIO ---------- */
+    /* ---------- DOWNLOAD AUDIO ---------- */
     const ar = await fetch(audioUrl);
-    if (!ar.ok) return res.status(400).json({ error: "Audio download failed" });
+    if (!ar.ok) throw new Error("Audio download failed");
     fs.writeFileSync(`${dir}/audio.wav`, Buffer.from(await ar.arrayBuffer()));
 
     const audioDuration = ffprobeDuration(`${dir}/audio.wav`);
-    if (!audioDuration || audioDuration < 1) {
-      return res.status(400).json({ error: "Invalid audio duration" });
-    }
-
     const perImage = audioDuration / images.length;
-    const fade = Math.min(1.2, Math.max(0.2, perImage * 0.35));
+    const fade = 1.0;
 
     const size = format === "9:16" ? "1080:1920" : "1920:1080";
     const [W, H] = size.split(":");
     const out = `${dir}/out.mp4`;
 
     /* ---------- AMBIENCE ---------- */
-    const ASSET_BASE_URL = process.env.ASSET_BASE_URL;
     let useAmbience = false;
     const ambiencePath = `${dir}/ambience.wav`;
+    const ambFile = pickAmbienceFilename(theme);
 
-    if (ASSET_BASE_URL) {
-      const ambFile = pickAmbienceFilename(theme);
-      if (ambFile) {
-        const ambUrl = `${ASSET_BASE_URL}/ambience/${ambFile}`;
-        const dl = await downloadToFile(ambUrl, ambiencePath);
-        if (dl.ok && looksLikeWav(ambiencePath) && ffprobeOk(ambiencePath)) {
-          useAmbience = true;
-        }
-      }
+    if (ambFile && process.env.ASSET_BASE_URL) {
+      const ok = await downloadToFile(
+        `${process.env.ASSET_BASE_URL}/ambience/${ambFile}`,
+        ambiencePath
+      );
+      useAmbience = ok;
     }
 
-    /* ---------- OVERLAY (NORMALIZED) ---------- */
+    /* ---------- OVERLAY ---------- */
     let useOverlay = false;
-    let overlayPicked = null;
+    const overlayPath = `${dir}/overlay.mp4`;
+    const overlayFile = pickOverlay(theme, format);
 
-    const overlayRawPath = `${dir}/overlay_raw.mp4`;
-    const overlayCleanPath = `${dir}/overlay_clean.mp4`;
-
-    if (ASSET_BASE_URL) {
-      overlayPicked = pickRandomOverlay();
-      const overlayUrl = `${ASSET_BASE_URL}/overlays/${overlayPicked}`;
-      const dl = await downloadToFile(overlayUrl, overlayRawPath);
-
-      if (dl.ok && ffprobeOk(overlayRawPath)) {
-        try {
-          normalizeOverlay(overlayRawPath, overlayCleanPath, W, H);
-          if (ffprobeOk(overlayCleanPath)) {
-            useOverlay = true;
-            console.log("✨ Overlay OK (normalized):", overlayPicked);
-          } else {
-            console.warn("⚠️ overlay_clean ffprobe failed, skipping overlay");
-          }
-        } catch {
-          console.warn("⚠️ overlay normalize crashed, skipping overlay");
-        }
-      } else {
-        console.warn("⚠️ overlay download/ffprobe failed, skipping overlay");
-      }
+    if (overlayFile && process.env.ASSET_BASE_URL) {
+      const ok = await downloadToFile(
+        `${process.env.ASSET_BASE_URL}/overlays/${format}/${overlayFile}`,
+        overlayPath
+      );
+      useOverlay = ok;
     }
 
     /* ---------- INPUTS ---------- */
@@ -177,88 +147,68 @@ app.post("/render", async (req, res) => {
       imageInputs +
       ` -i "${dir}/audio.wav"` +
       (useAmbience ? ` -stream_loop -1 -i "${ambiencePath}"` : "") +
-      (useOverlay ? ` -i "${overlayCleanPath}"` : "");
+      (useOverlay ? ` -stream_loop -1 -i "${overlayPath}"` : "");
 
     /* ---------- FILTER GRAPH ---------- */
     const filters = [];
 
-    // IMPORTANT: Convert yuvj420p -> yuv420p early to avoid full-range weirdness.
     images.forEach((_, i) => {
       filters.push(
-        `[${i}:v]` +
-          `scale=${W}:${H}:force_original_aspect_ratio=increase,` +
-          `crop=${W}:${H},` +
-          `fps=30,` +
-          `format=yuv420p,` +
-          `settb=1/30,` +
-          `setpts=PTS-STARTPTS` +
-          `[v${i}]`
+        `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,` +
+        `crop=${W}:${H},setpts=PTS-STARTPTS[v${i}]`
       );
     });
 
-    // Crossfade chain
     let last = "v0";
     let offset = perImage - fade;
 
     for (let i = 1; i < images.length; i++) {
       filters.push(
-        `[${last}][v${i}]xfade=transition=fade:duration=${fade}:offset=${offset}[vxf${i}]`
+        `[${last}][v${i}]xfade=transition=fade:duration=${fade}:offset=${offset}[vx${i}]`
       );
-      last = `vxf${i}`;
+      last = `vx${i}`;
       offset += perImage;
     }
 
-    // Overlay on top
+    let filter = filters.join(";");
+
     if (useOverlay) {
       const overlayIndex = images.length + (useAmbience ? 2 : 1);
-
-      filters.push(`[${last}]format=rgba[base]`);
-
-      // keep overlay alive for whole duration
-      filters.push(
-        `[${overlayIndex}:v]format=rgba,fps=30,` +
-          `tpad=stop_mode=clone:stop_duration=${Math.ceil(audioDuration)}[fx]`
-      );
-
-      filters.push(
-        `[base][fx]overlay=shortest=1:eof_action=pass,format=yuv420p[v]`
-      );
+      filter +=
+        `;[${last}]format=rgba[base]` +
+        `;[${overlayIndex}:v]scale=${W}:${H},format=rgba,colorchannelmixer=aa=0.18[fx]` +
+        `;[base][fx]overlay=shortest=1,format=yuv420p[v]`;
     } else {
-      filters.push(`[${last}]format=yuv420p[v]`);
+      filter += `;[${last}]format=yuv420p[v]`;
     }
 
-    // Audio
     if (useAmbience) {
-      filters.push(`[${images.length + 1}:a]volume=0.20[amb]`);
-      filters.push(`[${images.length}:a][amb]amix=inputs=2:duration=first[a]`);
+      filter +=
+        `;[${images.length + 1}:a]volume=0.2[amb]` +
+        `;[${images.length}:a][amb]amix=inputs=2:duration=first[a]`;
     } else {
-      filters.push(`[${images.length}:a]anull[a]`);
+      filter += `;[${images.length}:a]anull[a]`;
     }
-
-    const filterComplex = filters.join(";");
 
     /* ---------- EXEC ---------- */
     const cmd =
       `ffmpeg -y ${inputs} ` +
-      `-filter_complex "${filterComplex}" ` +
-      `-map "[v]" -map "[a]" ` +
-      `-shortest -r 30 ` +
+      `-filter_complex "${filter}" ` +
+      `-map "[v]" -map "[a]" -shortest -r 30 ` +
       `-c:v libx264 -preset veryfast -crf 28 -pix_fmt yuv420p -movflags +faststart ` +
       `-c:a aac -b:a 128k "${out}"`;
 
-    exec(cmd, { maxBuffer: 1024 * 1024 * 120 }, (err, _stdout, stderr) => {
+    exec(cmd, { maxBuffer: 1024 * 1024 * 50 }, (err, _o, stderr) => {
       if (err) {
-        const tail = String(stderr || "").slice(-6000);
-        console.error("❌ Overlay chosen:", overlayPicked);
-        console.error("❌ FFmpeg STDERR (tail):", tail);
-        return res.status(500).json({ error: "FFmpeg failed", overlay: overlayPicked, stderrTail: tail });
+        console.error("❌ FFmpeg failed:", stderr);
+        return res.status(500).json({ error: "FFmpeg failed" });
       }
       res.setHeader("Content-Type", "video/mp4");
       res.send(fs.readFileSync(out));
     });
 
   } catch (e) {
-    console.error(e);
+    console.error("🔥 Server crash:", e);
     res.status(500).json({ error: "Server crash" });
   }
 });
