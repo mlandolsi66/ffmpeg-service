@@ -23,13 +23,7 @@ function pickAmbienceFilename(themeRaw) {
 
 /* ------------------ OVERLAY POOL ------------------ */
 
-const OVERLAY_FILES = [
-  "sparkles.mp4",
-  "magic.mp4",
-  "dust_bokeh.mp4",
-  "light.mp4",
-];
-
+const OVERLAY_FILES = ["sparkles.mp4", "magic.mp4", "dust_bokeh.mp4", "light.mp4"];
 function pickRandomOverlay() {
   return OVERLAY_FILES[Math.floor(Math.random() * OVERLAY_FILES.length)];
 }
@@ -154,7 +148,7 @@ app.post("/render", async (req, res) => {
       (useAmbience ? ` -stream_loop -1 -i "${ambiencePath}"` : "") +
       (useOverlay ? ` -stream_loop -1 -i "${overlayPath}"` : "");
 
-    /* ---------- FILTER GRAPH (SAFE ZOOM) ---------- */
+    /* ---------- FILTER GRAPH ---------- */
     const zoomExpr = "1+0.0015*on";
 
     const vFilters = images
@@ -186,7 +180,7 @@ app.post("/render", async (req, res) => {
         `[${images.length + 1}:a]volume=0.2[amb];` +
         `[${images.length}:a][amb]amix=inputs=2:duration=first[a]`;
     } else {
-      filter += `[${images.length}:a]acopy[a]`;
+      filter += `[${images.length}:a]anull[a]`;
     }
 
     /* ---------- EXEC ---------- */
@@ -199,7 +193,7 @@ app.post("/render", async (req, res) => {
 
     exec(cmd, { maxBuffer: 1024 * 1024 * 50 }, (err) => {
       if (err) {
-        console.error("FFmpeg error");
+        console.error("❌ FFmpeg failed");
         return res.status(500).json({ error: "FFmpeg failed" });
       }
       res.setHeader("Content-Type", "video/mp4");
