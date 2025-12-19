@@ -25,7 +25,7 @@ function pickAmbienceFilename(themeRaw) {
 
 const OVERLAY_FILES = ["sparkles.mp4", "magic.mp4", "dust_bokeh.mp4", "light.mp4"];
 function pickRandomOverlay() {
-  return OVERLAY_FILES[Math.floor(Math.random() * OVERLAY_FILES.length)];
+  return OVERLAY_FILES[0];
 }
 
 /* ------------------ HELPERS ------------------ */
