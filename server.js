@@ -97,7 +97,7 @@ app.post("/render", async (req, res) => {
 
     const audioDuration = ffprobeDuration(`${dir}/audio.wav`);
     const perImage = audioDuration / images.length;
-    const fade = 0.8;
+    const fade = 1.2;
 
     const size = format === "9:16" ? "1080:1920" : "1920:1080";
     const [W, H] = size.split(":");
