@@ -96,10 +96,6 @@ app.post("/render", async (req, res) => {
     fs.writeFileSync(`${dir}/audio.wav`, Buffer.from(await ar.arrayBuffer()));
 
     const audioDuration = ffprobeDuration(`${dir}/audio.wav`);
-    if (!audioDuration || audioDuration < 1) {
-      return res.status(400).json({ error: "Invalid audio duration" });
-    }
-
     const perImage = audioDuration / images.length;
     const fade = 0.8;
 
@@ -147,7 +143,7 @@ app.post("/render", async (req, res) => {
       (useAmbience ? ` -stream_loop -1 -i "${ambiencePath}"` : "") +
       (useOverlay ? ` -stream_loop -1 -i "${overlayPath}"` : "");
 
-    /* ---------- FILTER GRAPH (CROSSFADE) ---------- */
+    /* ---------- FILTER GRAPH ---------- */
     let filters = [];
 
     images.forEach((_, i) => {
@@ -168,15 +164,25 @@ app.post("/render", async (req, res) => {
       offset += perImage;
     }
 
-    let filter = filters.join(";") + `;[${last}]format=yuv420p[v];`;
+    let filter = filters.join(";");
+
+    if (useOverlay) {
+      const overlayIndex = images.length + (useAmbience ? 2 : 1);
+      filter +=
+        `;[${last}]format=rgba[base];` +
+        `[${overlayIndex}:v]scale=${W}:${H},format=rgba,colorchannelmixer=aa=0.18[fx];` +
+        `[base][fx]overlay=shortest=1,format=yuv420p[v]`;
+    } else {
+      filter += `;[${last}]format=yuv420p[v]`;
+    }
 
     /* ---------- AUDIO ---------- */
     if (useAmbience) {
       filter +=
-        `[${images.length + 1}:a]volume=0.2[amb];` +
-        `[${images.length}:a][amb]amix=inputs=2:duration=first[a]`;
+        `;[${images.length + 1}:a]volume=0.2[amb]` +
+        `;[${images.length}:a][amb]amix=inputs=2:duration=first[a]`;
     } else {
-      filter += `[${images.length}:a]anull[a]`;
+      filter += `;[${images.length}:a]anull[a]`;
     }
 
     /* ---------- EXEC ---------- */
