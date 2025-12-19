@@ -72,11 +72,11 @@ function ffprobeDuration(filepath) {
 }
 
 /**
- * Normalize overlay into a safe stream:
+ * Normalize overlay to be safe:
  * - no audio
  * - constant fps=30
- * - scale/crop to target
- * - yuv420p
+ * - correct size
+ * - yuv420p baseline
  */
 function normalizeOverlay(rawPath, cleanPath, W, H) {
   execSync(
@@ -117,8 +117,6 @@ app.post("/render", async (req, res) => {
     }
 
     const perImage = audioDuration / images.length;
-
-    // xfade must be < perImage, otherwise it can fail.
     const fade = Math.min(1.2, Math.max(0.2, perImage * 0.35));
 
     const size = format === "9:16" ? "1080:1920" : "1920:1080";
@@ -141,14 +139,16 @@ app.post("/render", async (req, res) => {
       }
     }
 
-    /* ---------- OVERLAY (HARDENED) ---------- */
+    /* ---------- OVERLAY (NORMALIZED) ---------- */
     let useOverlay = false;
+    let overlayPicked = null;
+
     const overlayRawPath = `${dir}/overlay_raw.mp4`;
     const overlayCleanPath = `${dir}/overlay_clean.mp4`;
 
     if (ASSET_BASE_URL) {
-      const overlayFile = pickRandomOverlay();
-      const overlayUrl = `${ASSET_BASE_URL}/overlays/${overlayFile}`;
+      overlayPicked = pickRandomOverlay();
+      const overlayUrl = `${ASSET_BASE_URL}/overlays/${overlayPicked}`;
       const dl = await downloadToFile(overlayUrl, overlayRawPath);
 
       if (dl.ok && ffprobeOk(overlayRawPath)) {
@@ -156,20 +156,19 @@ app.post("/render", async (req, res) => {
           normalizeOverlay(overlayRawPath, overlayCleanPath, W, H);
           if (ffprobeOk(overlayCleanPath)) {
             useOverlay = true;
-            console.log("✨ Overlay OK (normalized):", overlayFile);
+            console.log("✨ Overlay OK (normalized):", overlayPicked);
           } else {
-            console.warn("⚠️ Overlay normalize failed (ffprobe). Skipping.");
+            console.warn("⚠️ overlay_clean ffprobe failed, skipping overlay");
           }
         } catch {
-          console.warn("⚠️ Overlay normalize crashed. Skipping overlay.");
+          console.warn("⚠️ overlay normalize crashed, skipping overlay");
         }
       } else {
-        console.warn("⚠️ Overlay download/ffprobe failed. Skipping overlay.");
+        console.warn("⚠️ overlay download/ffprobe failed, skipping overlay");
       }
     }
 
     /* ---------- INPUTS ---------- */
-    // Force each image input to a stable 30fps timeline via filter graph (below).
     const imageInputs = images
       .map((_, i) => `-loop 1 -t ${perImage} -i "${dir}/img${i}.jpg"`)
       .join(" ");
@@ -183,16 +182,14 @@ app.post("/render", async (req, res) => {
     /* ---------- FILTER GRAPH ---------- */
     const filters = [];
 
-    // Make EVERY image stream identical:
-    // - scale/crop to output size
-    // - fps=30
-    // - stable timebase + timestamps
+    // IMPORTANT: Convert yuvj420p -> yuv420p early to avoid full-range weirdness.
     images.forEach((_, i) => {
       filters.push(
         `[${i}:v]` +
           `scale=${W}:${H}:force_original_aspect_ratio=increase,` +
           `crop=${W}:${H},` +
           `fps=30,` +
+          `format=yuv420p,` +
           `settb=1/30,` +
           `setpts=PTS-STARTPTS` +
           `[v${i}]`
@@ -211,19 +208,18 @@ app.post("/render", async (req, res) => {
       offset += perImage;
     }
 
-    // Video output with optional overlay
+    // Overlay on top
     if (useOverlay) {
       const overlayIndex = images.length + (useAmbience ? 2 : 1);
 
-      // Overlay already normalized to fps=30 & size; just pad to full duration safely.
+      filters.push(`[${last}]format=rgba[base]`);
+
+      // keep overlay alive for whole duration
       filters.push(
-        `[${last}]format=rgba[base]`
-      );
-      filters.push(
-        `[${overlayIndex}:v]format=rgba,` +
-          `fps=30,` +
+        `[${overlayIndex}:v]format=rgba,fps=30,` +
           `tpad=stop_mode=clone:stop_duration=${Math.ceil(audioDuration)}[fx]`
       );
+
       filters.push(
         `[base][fx]overlay=shortest=1:eof_action=pass,format=yuv420p[v]`
       );
@@ -231,16 +227,10 @@ app.post("/render", async (req, res) => {
       filters.push(`[${last}]format=yuv420p[v]`);
     }
 
-    // Audio mix
+    // Audio
     if (useAmbience) {
-      // narration index = images.length
-      // ambience index  = images.length + 1
-      filters.push(
-        `[${images.length + 1}:a]volume=0.20[amb]`
-      );
-      filters.push(
-        `[${images.length}:a][amb]amix=inputs=2:duration=first[a]`
-      );
+      filters.push(`[${images.length + 1}:a]volume=0.20[amb]`);
+      filters.push(`[${images.length}:a][amb]amix=inputs=2:duration=first[a]`);
     } else {
       filters.push(`[${images.length}:a]anull[a]`);
     }
@@ -256,10 +246,12 @@ app.post("/render", async (req, res) => {
       `-c:v libx264 -preset veryfast -crf 28 -pix_fmt yuv420p -movflags +faststart ` +
       `-c:a aac -b:a 128k "${out}"`;
 
-    exec(cmd, { maxBuffer: 1024 * 1024 * 80 }, (err, _stdout, stderr) => {
+    exec(cmd, { maxBuffer: 1024 * 1024 * 120 }, (err, _stdout, stderr) => {
       if (err) {
-        console.error("❌ FFmpeg STDERR:", stderr);
-        return res.status(500).json({ error: "FFmpeg failed" });
+        const tail = String(stderr || "").slice(-6000);
+        console.error("❌ Overlay chosen:", overlayPicked);
+        console.error("❌ FFmpeg STDERR (tail):", tail);
+        return res.status(500).json({ error: "FFmpeg failed", overlay: overlayPicked, stderrTail: tail });
       }
       res.setHeader("Content-Type", "video/mp4");
       res.send(fs.readFileSync(out));
