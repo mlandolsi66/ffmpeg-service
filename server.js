@@ -25,7 +25,7 @@ function pickAmbienceFilename(themeRaw) {
 
 const OVERLAY_FILES = ["sparkles.mp4", "magic.mp4", "dust_bokeh.mp4", "light.mp4"];
 function pickRandomOverlay() {
-  return OVERLAY_FILES[0];
+  return OVERLAY_FILES[Math.floor(Math.random() * OVERLAY_FILES.length)];
 }
 
 /* ------------------ HELPERS ------------------ */
@@ -70,6 +70,24 @@ function ffprobeDuration(filepath) {
       .trim()
   );
 }
+
+/* ------------------ ASSETS CHECK ------------------ */
+
+app.get("/debug-overlay", async (req, res) => {
+  const file = "/tmp/test-overlay.mp4";
+
+  await fetch(process.env.ASSET_BASE_URL + "/overlays/sparkles.mp4")
+    .then(r => r.arrayBuffer())
+    .then(b => fs.writeFileSync(file, Buffer.from(b)));
+
+  try {
+    const info = execSync(`ffprobe "${file}"`).toString();
+    res.type("text").send(info);
+  } catch (e) {
+    res.status(500).send("ffprobe failed");
+  }
+});
+
 
 /* ------------------ RENDER ------------------ */
 
