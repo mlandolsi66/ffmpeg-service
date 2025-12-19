@@ -110,7 +110,7 @@ app.post("/render", async (req, res) => {
 
       overlayInput = ` -stream_loop -1 -i "${overlayClean}"`;
       overlayFilter =
-        `;[vbase][vover]overlay=shortest=1:format=auto,format=yuv420p[v]`;
+        `;[vbase][vover]overlay=eof_action=repeat:format=auto,format=yuv420p[v]`;
     }
 
     /* -------- INPUTS -------- */
