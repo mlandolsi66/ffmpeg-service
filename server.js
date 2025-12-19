@@ -149,8 +149,15 @@ app.post("/render", async (req, res) => {
     const vFilters = images
       .map(
         (_, i) =>
+          const half = Math.floor(frames / 2);
+
           `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,` +
-          `crop=${W}:${H},setpts=PTS-STARTPTS[v${i}]`
+          `crop=${W}:${H},` +
+          `zoompan=` +
+          `z='if(lte(on,${half}),1+0.06*on/${half},1.06-0.06*(on-${half})/(${frames}-${half}))':` +
+          `d=${frames}:s=${W}x${H}:fps=30,` +
+          `setpts=PTS-STARTPTS[v${i}]`
+
       )
       .join(";");
 
