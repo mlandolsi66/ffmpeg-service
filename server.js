@@ -100,10 +100,8 @@ app.post("/render", async (req, res) => {
       return res.status(400).json({ error: "Invalid audio duration" });
     }
 
-    const perImage = Math.max(audioDuration / images.length, 0.8);
-    const fps = 30;
-    const frames = Math.round(perImage * fps);
-    const half = Math.floor(frames / 2);
+    const perImage = audioDuration / images.length;
+    const fade = 0.8;
 
     const size = format === "9:16" ? "1080:1920" : "1920:1080";
     const [W, H] = size.split(":");
@@ -140,7 +138,7 @@ app.post("/render", async (req, res) => {
 
     /* ---------- INPUTS ---------- */
     const imageInputs = images
-      .map((_, i) => `-loop 1 -i "${dir}/img${i}.jpg"`)
+      .map((_, i) => `-loop 1 -t ${perImage} -i "${dir}/img${i}.jpg"`)
       .join(" ");
 
     const inputs =
@@ -149,34 +147,30 @@ app.post("/render", async (req, res) => {
       (useAmbience ? ` -stream_loop -1 -i "${ambiencePath}"` : "") +
       (useOverlay ? ` -stream_loop -1 -i "${overlayPath}"` : "");
 
-    /* ---------- FILTER GRAPH (ZOOM IN → OUT) ---------- */
-    const vFilters = images
-      .map(
-        (_, i) =>
-          `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,` +
-          `crop=${W}:${H},` +
-          `zoompan=z='if(lte(on,${half}),1+0.06*on/${half},1.06-0.06*(on-${half})/(${frames}-${half}))':` +
-          `d=${frames}:s=${W}x${H}:fps=${fps},` +
-          `setpts=PTS-STARTPTS[v${i}]`
-      )
-      .join(";");
+    /* ---------- FILTER GRAPH (CROSSFADE) ---------- */
+    let filters = [];
 
-    const concatInputs = images.map((_, i) => `[v${i}]`).join("");
+    images.forEach((_, i) => {
+      filters.push(
+        `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,` +
+        `crop=${W}:${H},setpts=PTS-STARTPTS[v${i}]`
+      );
+    });
 
-    let filter =
-      `${vFilters};` +
-      `${concatInputs}concat=n=${images.length}:v=1:a=0[vbase];`;
+    let last = "v0";
+    let offset = perImage - fade;
 
-    if (useOverlay) {
-      const overlayIndex = images.length + (useAmbience ? 2 : 1);
-      filter +=
-        `[vbase]format=rgba[base];` +
-        `[${overlayIndex}:v]scale=${W}:${H},format=rgba,colorchannelmixer=aa=0.18[fx];` +
-        `[base][fx]overlay=shortest=1:format=auto,format=yuv420p[v];`;
-    } else {
-      filter += `[vbase]format=yuv420p[v];`;
+    for (let i = 1; i < images.length; i++) {
+      filters.push(
+        `[${last}][v${i}]xfade=transition=fade:duration=${fade}:offset=${offset}[vxf${i}]`
+      );
+      last = `vxf${i}`;
+      offset += perImage;
     }
 
+    let filter = filters.join(";") + `;[${last}]format=yuv420p[v];`;
+
+    /* ---------- AUDIO ---------- */
     if (useAmbience) {
       filter +=
         `[${images.length + 1}:a]volume=0.2[amb];` +
@@ -189,7 +183,7 @@ app.post("/render", async (req, res) => {
     const cmd =
       `ffmpeg -y ${inputs} ` +
       `-filter_complex "${filter}" ` +
-      `-map "[v]" -map "[a]" -shortest -r ${fps} ` +
+      `-map "[v]" -map "[a]" -shortest -r 30 ` +
       `-c:v libx264 -preset veryfast -crf 28 -pix_fmt yuv420p -movflags +faststart ` +
       `-c:a aac -b:a 128k "${out}"`;
 
