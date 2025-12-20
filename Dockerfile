@@ -12,7 +12,7 @@ RUN npm install
 # ---------- copy app + overlays ----------
 COPY server.js ./
 COPY overlays ./overlays
-COPY ambience ./ambience   # 🔥 REQUIRED
+COPY ambience ./ambience   #
 
 # ---------- normalize overlays (BUILD TIME) ----------
 RUN mkdir -p overlays/9x16 overlays/16x9 && \
