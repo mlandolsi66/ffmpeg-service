@@ -181,7 +181,8 @@ app.post("/render", async (req, res) => {
     /* ---------- FILTER GRAPH ---------- */
     const filters = images.map(
       (_, i) =>
-        `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setpts=PTS-STARTPTS[v${i}]`
+        `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=30,setpts=PTS-STARTPTS[v${i}]`        
+
     );
 
     const concat = images.map((_, i) => `[v${i}]`).join("");
@@ -192,7 +193,10 @@ app.post("/render", async (req, res) => {
 
     if (useOverlay) {
       const overlayIndex = images.length + 1 + (useAmbience ? 1 : 0);
-      filter += `;[vbase][${overlayIndex}:v]overlay=shortest=1[v]`;
+      filter +=
+      `;[vbase]fps=30,setpts=PTS-STARTPTS[base]` +
+      `;[${overlayIndex}:v]fps=30,setpts=PTS-STARTPTS[fx]` +
+      `;[base][fx]overlay=shortest=1[v]`;
     } else {
       filter += `;[vbase]format=yuv420p[v]`;
     }
