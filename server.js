@@ -1,15 +1,22 @@
 import express from "express";
 import fetch from "node-fetch";
-import { execSync } from "child_process";
+import { exec } from "child_process";
 import fs from "fs";
-import path from "path";
 
 const app = express();
 app.use(express.json({ limit: "50mb" }));
 
 /* ------------------ HELPERS ------------------ */
 
-async function downloadWithRetry(url, dest, { tries = 3, minBytes = 10_000, expectType = "" } = {}) {
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+async function downloadWithRetry(
+  url,
+  dest,
+  { tries = 3, minBytes = 10_000, expectType = "" } = {}
+) {
   let lastErr;
   for (let i = 1; i <= tries; i++) {
     try {
@@ -29,7 +36,7 @@ async function downloadWithRetry(url, dest, { tries = 3, minBytes = 10_000, expe
       return;
     } catch (e) {
       lastErr = e;
-      await new Promise(r => setTimeout(r, 300 * i));
+      await sleep(250 * i);
     }
   }
   throw lastErr;
@@ -37,6 +44,7 @@ async function downloadWithRetry(url, dest, { tries = 3, minBytes = 10_000, expe
 
 function ffprobeDuration(file) {
   try {
+    const { execSync } = await import("child_process");
     return parseFloat(
       execSync(
         `ffprobe -v error -show_entries format=duration -of csv=p=0 "${file}"`
@@ -47,32 +55,26 @@ function ffprobeDuration(file) {
   }
 }
 
-function ffprobeOk(file) {
-  try {
-    execSync(`ffprobe -v error "${file}"`);
-    return true;
-  } catch {
-    return false;
-  }
+function run(cmd) {
+  return new Promise((resolve, reject) => {
+    exec(cmd, { maxBuffer: 1024 * 1024 * 80 }, (err, stdout, stderr) => {
+      if (err) reject(stderr || err);
+      else resolve();
+    });
+  });
 }
 
-/* ------------------ ASSET PICKERS ------------------ */
+/* ------------------ PICKERS ------------------ */
 
-function pickOverlayPath(format) {
-  const base = format === "9:16" ? "overlays/9x16" : "overlays/16x9";
-  if (!fs.existsSync(base)) return null;
-
-  const files = fs.readdirSync(base).filter(f => f.endsWith(".mp4"));
-  if (!files.length) return null;
-
-  return path.join(base, files[Math.floor(Math.random() * files.length)]);
-}
-
-function pickAmbiencePath(theme) {
-  theme = String(theme || "").toLowerCase();
-  if (theme.includes("ocean")) return "ambience/waves.wav";
-  if (theme.includes("space")) return "ambience/whitenoise-space.wav";
+function pickAmbienceFilename(theme) {
+  const t = String(theme || "").toLowerCase();
+  if (t.includes("ocean")) return "waves.wav";
+  if (t.includes("space")) return "whitenoise-space.wav";
   return null;
+}
+
+function pickOverlayFilename(format) {
+  return format === "9:16" ? "bokeh_ready.mp4" : "magic.mp4";
 }
 
 /* ------------------ RENDER ------------------ */
@@ -80,7 +82,7 @@ function pickAmbiencePath(theme) {
 app.post("/render", async (req, res) => {
   const { videoId, images, audioUrl, format, theme } = req.body;
 
-  if (!videoId || !Array.isArray(images) || !images.length || !audioUrl) {
+  if (!videoId || !images?.length || !audioUrl) {
     return res.status(400).json({ error: "Missing inputs" });
   }
 
@@ -88,7 +90,7 @@ app.post("/render", async (req, res) => {
   fs.mkdirSync(dir, { recursive: true });
 
   try {
-    /* ---------- DOWNLOAD IMAGES ---------- */
+    /* ---------- IMAGES ---------- */
     for (let i = 0; i < images.length; i++) {
       await downloadWithRetry(images[i], `${dir}/img${i}.jpg`, {
         expectType: "image",
@@ -102,41 +104,47 @@ app.post("/render", async (req, res) => {
       minBytes: 20_000
     });
 
-    if (!ffprobeOk(`${dir}/audio.wav`)) {
-      throw new Error("Narration audio invalid");
-    }
-
     const audioDuration = ffprobeDuration(`${dir}/audio.wav`);
     if (!audioDuration || !isFinite(audioDuration)) {
-      throw new Error("Invalid narration duration");
+      throw new Error("Invalid narration");
     }
 
+    const perImage = Math.max(audioDuration / images.length, 3);
     const size = format === "9:16" ? "1080:1920" : "1920:1080";
     const [W, H] = size.split(":");
 
-    /* ---------- OPTIONAL AMBIENCE (LOCAL) ---------- */
+    /* ---------- AMBIENCE (REMOTE ONLY) ---------- */
     let ambienceInput = "";
     let useAmbience = false;
 
-    const ambiencePath = pickAmbiencePath(theme);
-    if (ambiencePath && fs.existsSync(ambiencePath) && ffprobeOk(ambiencePath)) {
-      ambienceInput = ` -stream_loop -1 -i "${ambiencePath}"`;
-      useAmbience = true;
+    const amb = pickAmbienceFilename(theme);
+    if (amb && process.env.ASSET_BASE_URL) {
+      try {
+        await downloadWithRetry(
+          `${process.env.ASSET_BASE_URL}/ambience/${amb}`,
+          `${dir}/amb.wav`,
+          { expectType: "audio", minBytes: 20_000 }
+        );
+        ambienceInput = ` -stream_loop -1 -i "${dir}/amb.wav"`;
+        useAmbience = true;
+      } catch {
+        useAmbience = false;
+      }
     }
 
-    /* ---------- OPTIONAL OVERLAY (LOCAL) ---------- */
+    /* ---------- OVERLAY (LOCAL, PRE-NORMALIZED) ---------- */
     let overlayInput = "";
     let useOverlay = false;
 
-    const overlayPath = pickOverlayPath(format);
-    if (overlayPath && fs.existsSync(overlayPath) && ffprobeOk(overlayPath)) {
+    const overlayPath = `overlays/${format === "9:16" ? "9x16" : "16x9"}/${pickOverlayFilename(format)}`;
+    if (fs.existsSync(overlayPath)) {
       overlayInput = ` -stream_loop -1 -i "${overlayPath}"`;
       useOverlay = true;
     }
 
     /* ---------- INPUTS ---------- */
     const imageInputs = images
-      .map((_, i) => `-loop 1 -i "${dir}/img${i}.jpg"`)
+      .map((_, i) => `-loop 1 -t ${perImage} -i "${dir}/img${i}.jpg"`)
       .join(" ");
 
     const inputs =
@@ -145,28 +153,23 @@ app.post("/render", async (req, res) => {
       ambienceInput +
       overlayInput;
 
-    /* ---------- FILTER GRAPH (CORRECT & SAFE) ---------- */
-
+    /* ---------- FILTER GRAPH (SIMPLE + SAFE) ---------- */
     const imageFilters = images.map(
       (_, i) =>
-        `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,` +
-        `crop=${W}:${H},fps=30,setpts=PTS-STARTPTS[v${i}]`
+        `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setpts=PTS-STARTPTS[v${i}]`
     );
-
-    const concatInputs = images.map((_, i) => `[v${i}]`).join("");
 
     let filter =
       `${imageFilters.join(";")};` +
-      `${concatInputs}concat=n=${images.length}:v=1:a=0,` +
-      `setpts=PTS-STARTPTS,trim=duration=${audioDuration}[vbase]`;
+      `${images.map((_, i) => `[v${i}]`).join("")}concat=n=${images.length}:v=1:a=0,format=yuv420p[vbase]`;
 
     if (useOverlay) {
-      const overlayIndex = images.length + 1 + (useAmbience ? 1 : 0);
+      const ovIdx = images.length + 1 + (useAmbience ? 1 : 0);
       filter +=
-        `;[${overlayIndex}:v]fps=30,setpts=PTS-STARTPTS[fx]` +
+        `;[${ovIdx}:v]fps=30,format=rgba[fx]` +
         `;[vbase][fx]overlay=shortest=1[v]`;
     } else {
-      filter += `;[vbase]format=yuv420p[v]`;
+      filter += `;[vbase]copy[v]`;
     }
 
     if (useAmbience) {
@@ -177,22 +180,24 @@ app.post("/render", async (req, res) => {
     }
 
     /* ---------- EXEC ---------- */
+    const out = `${dir}/out.mp4`;
 
     const cmd =
       `ffmpeg -y ${inputs} ` +
       `-filter_complex "${filter}" ` +
       `-map "[v]" -map "[a]" -shortest ` +
       `-c:v libx264 -preset veryfast -crf 28 -pix_fmt yuv420p ` +
-      `-c:a aac -b:a 128k "${dir}/out.mp4"`;
+      `-c:a aac -b:a 128k "${out}"`;
 
-    execSync(cmd, { stdio: "inherit" });
+    console.log("🎬 ffmpeg:", cmd);
+    await run(cmd);
 
     res.setHeader("Content-Type", "video/mp4");
-    res.send(fs.readFileSync(`${dir}/out.mp4`));
+    res.send(fs.readFileSync(out));
 
   } catch (e) {
     console.error("🔥 render failed:", e);
-    res.status(500).json({ error: "Render failed", details: String(e.message || e) });
+    res.status(500).json({ error: "Render failed", details: String(e) });
   }
 });
 
