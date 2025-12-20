@@ -1,6 +1,6 @@
 import express from "express";
 import fetch from "node-fetch";
-import { exec } from "child_process";
+import { exec, execSync } from "child_process";
 import fs from "fs";
 
 const app = express();
@@ -9,7 +9,7 @@ app.use(express.json({ limit: "50mb" }));
 /* ------------------ HELPERS ------------------ */
 
 function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 async function downloadWithRetry(
@@ -44,18 +44,19 @@ async function downloadWithRetry(
 
 function ffprobeDuration(file) {
   try {
-    const { execSync } = await import("child_process");
     return parseFloat(
       execSync(
         `ffprobe -v error -show_entries format=duration -of csv=p=0 "${file}"`
-      ).toString().trim()
+      )
+        .toString()
+        .trim()
     );
   } catch {
     return NaN;
   }
 }
 
-function run(cmd) {
+function runFfmpeg(cmd) {
   return new Promise((resolve, reject) => {
     exec(cmd, { maxBuffer: 1024 * 1024 * 80 }, (err, stdout, stderr) => {
       if (err) reject(stderr || err);
@@ -94,19 +95,19 @@ app.post("/render", async (req, res) => {
     for (let i = 0; i < images.length; i++) {
       await downloadWithRetry(images[i], `${dir}/img${i}.jpg`, {
         expectType: "image",
-        minBytes: 8000
+        minBytes: 8000,
       });
     }
 
     /* ---------- NARRATION ---------- */
     await downloadWithRetry(audioUrl, `${dir}/audio.wav`, {
       expectType: "audio",
-      minBytes: 20_000
+      minBytes: 20_000,
     });
 
     const audioDuration = ffprobeDuration(`${dir}/audio.wav`);
     if (!audioDuration || !isFinite(audioDuration)) {
-      throw new Error("Invalid narration");
+      throw new Error("Invalid narration audio");
     }
 
     const perImage = Math.max(audioDuration / images.length, 3);
@@ -132,7 +133,7 @@ app.post("/render", async (req, res) => {
       }
     }
 
-    /* ---------- OVERLAY (LOCAL, PRE-NORMALIZED) ---------- */
+    /* ---------- OVERLAY (LOCAL, NORMALIZED) ---------- */
     let overlayInput = "";
     let useOverlay = false;
 
@@ -153,7 +154,7 @@ app.post("/render", async (req, res) => {
       ambienceInput +
       overlayInput;
 
-    /* ---------- FILTER GRAPH (SIMPLE + SAFE) ---------- */
+    /* ---------- FILTER GRAPH (SIMPLE + STABLE) ---------- */
     const imageFilters = images.map(
       (_, i) =>
         `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setpts=PTS-STARTPTS[v${i}]`
@@ -190,7 +191,7 @@ app.post("/render", async (req, res) => {
       `-c:a aac -b:a 128k "${out}"`;
 
     console.log("🎬 ffmpeg:", cmd);
-    await run(cmd);
+    await runFfmpeg(cmd);
 
     res.setHeader("Content-Type", "video/mp4");
     res.send(fs.readFileSync(out));
