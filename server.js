@@ -70,7 +70,9 @@ app.post("/render", async (req, res) => {
       return res.status(400).json({ error: "Invalid narration audio" });
     }
 
-    const perImage = Math.max(audioDuration / images.length, 1.2);
+    /* 🔒 MIN 3s PER IMAGE (FIX NARRATION RUSH) */
+    const perImage = Math.max(audioDuration / images.length, 3);
+
     const size = format === "9:16" ? "1080:1920" : "1920:1080";
     const [W, H] = size.split(":");
 
@@ -112,11 +114,11 @@ app.post("/render", async (req, res) => {
       ambienceInput +
       overlayInput;
 
-    /* ---------- FILTER GRAPH ---------- */
+    /* ---------- FILTER GRAPH (FIXED COLOR RANGE) ---------- */
 
     const filters = images.map(
       (_, i) =>
-        `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setpts=PTS-STARTPTS[v${i}]`
+        `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase:in_range=full:out_range=tv,crop=${W}:${H},setpts=PTS-STARTPTS[v${i}]`
     );
 
     const concat = images.map((_, i) => `[v${i}]`).join("");
