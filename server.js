@@ -6,8 +6,6 @@ import fs from "fs";
 const app = express();
 app.use(express.json({ limit: "50mb" }));
 
-/* ------------------ THEME → AMBIENCE ------------------ */
-
 function pickAmbienceFilename(themeRaw) {
   const theme = String(themeRaw || "").toLowerCase();
   if (theme.includes("ocean")) return "waves.wav";
@@ -16,16 +14,12 @@ function pickAmbienceFilename(themeRaw) {
   return null;
 }
 
-/* ------------------ OVERLAY PICKER ------------------ */
-
 function pickOverlay(format) {
   if (format === "9:16") {
     return ["bokeh.mp4", "dust.mp4", "lights.mp4"][Math.floor(Math.random() * 3)];
   }
   return ["sparkles.mp4", "magic.mp4", "dust_bokeh.mp4"][Math.floor(Math.random() * 3)];
 }
-
-/* ------------------ HELPERS ------------------ */
 
 function ffprobeDuration(file) {
   try {
@@ -44,12 +38,9 @@ async function download(url, dest) {
   fs.writeFileSync(dest, Buffer.from(await r.arrayBuffer()));
 }
 
-/* ------------------ RENDER ------------------ */
-
 app.post("/render", async (req, res) => {
   try {
     const { videoId, images, audioUrl, format, theme } = req.body;
-
     if (!videoId || !images?.length || !audioUrl) {
       return res.status(400).json({ error: "Missing inputs" });
     }
@@ -57,12 +48,10 @@ app.post("/render", async (req, res) => {
     const dir = `/tmp/${videoId}`;
     fs.mkdirSync(dir, { recursive: true });
 
-    /* ---------- IMAGES ---------- */
     for (let i = 0; i < images.length; i++) {
       await download(images[i], `${dir}/img${i}.jpg`);
     }
 
-    /* ---------- AUDIO ---------- */
     await download(audioUrl, `${dir}/audio.wav`);
 
     const audioDuration = ffprobeDuration(`${dir}/audio.wav`);
@@ -70,13 +59,12 @@ app.post("/render", async (req, res) => {
       return res.status(400).json({ error: "Invalid narration audio" });
     }
 
-    /* 🔒 MIN 3s PER IMAGE (FIX NARRATION RUSH) */
+    // ✅ SAFE FIX: MIN 3s PER IMAGE
     const perImage = Math.max(audioDuration / images.length, 3);
 
     const size = format === "9:16" ? "1080:1920" : "1920:1080";
     const [W, H] = size.split(":");
 
-    /* ---------- AMBIENCE ---------- */
     let ambienceInput = "";
     let useAmbience = false;
     const ambienceFile = pickAmbienceFilename(theme);
@@ -88,7 +76,6 @@ app.post("/render", async (req, res) => {
       ambienceInput = ` -stream_loop -1 -i "${ambPath}"`;
     }
 
-    /* ---------- OVERLAY ---------- */
     let overlayInput = "";
     let useOverlay = false;
     const overlayFile = pickOverlay(format);
@@ -103,7 +90,6 @@ app.post("/render", async (req, res) => {
       overlayInput = ` -stream_loop -1 -i "${ovPath}"`;
     }
 
-    /* ---------- INPUTS ---------- */
     const imageInputs = images
       .map((_, i) => `-loop 1 -t ${perImage} -i "${dir}/img${i}.jpg"`)
       .join(" ");
@@ -114,11 +100,9 @@ app.post("/render", async (req, res) => {
       ambienceInput +
       overlayInput;
 
-    /* ---------- FILTER GRAPH (FIXED COLOR RANGE) ---------- */
-
     const filters = images.map(
       (_, i) =>
-        `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase:in_range=full:out_range=tv,crop=${W}:${H},setpts=PTS-STARTPTS[v${i}]`
+        `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setpts=PTS-STARTPTS[v${i}]`
     );
 
     const concat = images.map((_, i) => `[v${i}]`).join("");
@@ -141,8 +125,6 @@ app.post("/render", async (req, res) => {
     } else {
       filter += `;[${images.length}:a]anull[a]`;
     }
-
-    /* ---------- EXEC ---------- */
 
     const out = `${dir}/out.mp4`;
     const cmd =
