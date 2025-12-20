@@ -47,20 +47,18 @@ async function downloadWithRetry(
   { tries = 3, minBytes = 10_000, expectType = "" } = {}
 ) {
   let lastErr;
-
   for (let i = 1; i <= tries; i++) {
     try {
       const r = await fetch(url, { redirect: "follow" });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-
       const ct = (r.headers.get("content-type") || "").toLowerCase();
       const buf = Buffer.from(await r.arrayBuffer());
 
-      if (buf.length < minBytes) throw new Error(`Too small (${buf.length})`);
+      if (buf.length < minBytes) throw new Error("file too small");
       if (ct.includes("text/html") || ct.includes("application/json"))
-        throw new Error(`Bad content-type: ${ct}`);
+        throw new Error("bad content-type");
       if (expectType && !ct.includes(expectType))
-        throw new Error(`Unexpected content-type: ${ct}`);
+        throw new Error("unexpected content-type");
 
       fs.writeFileSync(dest, buf);
       return;
@@ -69,7 +67,6 @@ async function downloadWithRetry(
       await new Promise(r => setTimeout(r, 250 * i));
     }
   }
-
   throw lastErr;
 }
 
@@ -87,8 +84,7 @@ function runFfmpeg(cmd) {
 app.post("/render", async (req, res) => {
   try {
     const { videoId, images, audioUrl, format, theme } = req.body;
-
-    if (!videoId || !Array.isArray(images) || !images.length || !audioUrl) {
+    if (!videoId || !images?.length || !audioUrl) {
       return res.status(400).json({ error: "Missing inputs" });
     }
 
@@ -110,43 +106,36 @@ app.post("/render", async (req, res) => {
     });
 
     const audioDuration = ffprobeDuration(`${dir}/audio.wav`);
-    if (!isFinite(audioDuration)) {
-      return res.status(400).json({ error: "Invalid narration audio" });
-    }
-
     const perImage = Math.max(audioDuration / images.length, 3);
+
     const size = format === "9:16" ? "1080:1920" : "1920:1080";
     const [W, H] = size.split(":");
 
-    /* ---------- AMBIENCE (REMOTE) ---------- */
+    /* ---------- AMBIENCE ---------- */
     let ambienceInput = "";
     let useAmbience = false;
+    const ambFile = pickAmbienceFilename(theme);
 
-    const ambienceFile = pickAmbienceFilename(theme);
-    if (ambienceFile && process.env.ASSET_BASE_URL) {
+    if (ambFile && process.env.ASSET_BASE_URL) {
       try {
         const ambPath = `${dir}/amb.wav`;
         await downloadWithRetry(
-          `${process.env.ASSET_BASE_URL}/ambience/${ambienceFile}`,
+          `${process.env.ASSET_BASE_URL}/ambience/${ambFile}`,
           ambPath,
           { expectType: "audio", minBytes: 20_000 }
         );
         ambienceInput = ` -stream_loop -1 -i "${ambPath}"`;
         useAmbience = true;
-      } catch {
-        useAmbience = false;
-      }
+      } catch {}
     }
 
-    /* ---------- OVERLAY (LOCAL, FIXED) ---------- */
+    /* ---------- OVERLAY (LOCAL + LOOPED) ---------- */
     let overlayInput = "";
     let useOverlay = false;
-    let ovPath = null;
 
-    const overlayPath = pickOverlayPath(format);
-    if (overlayPath) {
-      ovPath = overlayPath;
-      overlayInput = ` -i "${ovPath}"`;
+    const ovPath = pickOverlayPath(format);
+    if (ovPath) {
+      overlayInput = ` -stream_loop -1 -i "${ovPath}"`;
       useOverlay = true;
     }
 
@@ -175,11 +164,10 @@ app.post("/render", async (req, res) => {
 
     if (useOverlay) {
       const overlayIndex = images.length + 1 + (useAmbience ? 1 : 0);
-
       filter +=
         `;[vbase]format=rgba[base]` +
         `;[${overlayIndex}:v]scale=${W}:${H},format=rgba,colorchannelmixer=aa=0.15[fx]` +
-        `;[base][fx]overlay=shortest=1,format=yuv420p[v]`;
+        `;[base][fx]overlay,format=yuv420p[v]`;
     } else {
       filter += `;[vbase]format=yuv420p[v]`;
     }
@@ -202,7 +190,6 @@ app.post("/render", async (req, res) => {
       `-c:v libx264 -preset veryfast -crf 28 -pix_fmt yuv420p ` +
       `-movflags +faststart -c:a aac -b:a 128k "${out}"`;
 
-    console.log("🎬 ffmpeg:", cmd);
     await runFfmpeg(cmd);
 
     res.setHeader("Content-Type", "video/mp4");
@@ -210,7 +197,7 @@ app.post("/render", async (req, res) => {
 
   } catch (e) {
     console.error("🔥 Server crash:", e);
-    res.status(500).json({ error: "Server crash", details: String(e) });
+    res.status(500).json({ error: "render failed", details: String(e) });
   }
 });
 
