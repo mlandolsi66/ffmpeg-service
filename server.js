@@ -6,23 +6,33 @@ import fs from "fs";
 const app = express();
 app.use(express.json({ limit: "50mb" }));
 
-/* ------------------ THEME → AMBIENCE ------------------ */
+/* ------------------ THEME → AMBIENCE (LOCAL) ------------------ */
 
-function pickAmbienceFilename(themeRaw) {
+function pickAmbiencePath(themeRaw) {
   const theme = String(themeRaw || "").toLowerCase();
-  if (theme.includes("ocean")) return "waves.wav";
-  if (theme.includes("space")) return "whitenoise-space.wav";
-  if (theme.includes("dino")) return "music-box-34179.wav";
-  return null;
+  let file = null;
+
+  if (theme.includes("ocean")) file = "waves.wav";
+  else if (theme.includes("space")) file = "whitenoise-space.wav";
+  else if (theme.includes("dino")) file = "music-box-34179.wav";
+  else if (theme.includes("forest")) file = "forest.wav";
+  else if (theme.includes("fairy")) file = "fairy.wav";
+  else if (theme.includes("adventure")) file = "adventure.wav";
+  else if (theme.includes("lullaby")) file = "lullaby.wav";
+
+  if (!file) return null;
+
+  const p = `ambience/${file}`;
+  return fs.existsSync(p) ? p : null;
 }
 
-/* ------------------ OVERLAY PICKER (LOCAL FILES) ------------------ */
+/* ------------------ OVERLAY PICKER (LOCAL) ------------------ */
 
 function pickOverlayPath(format) {
   const base = format === "9:16" ? "overlays/9x16" : "overlays/16x9";
   if (!fs.existsSync(base)) return null;
 
-  const files = fs.readdirSync(base).filter((f) => f.endsWith(".mp4"));
+  const files = fs.readdirSync(base).filter(f => f.endsWith(".mp4"));
   if (!files.length) return null;
 
   return `${base}/${files[Math.floor(Math.random() * files.length)]}`;
@@ -32,60 +42,27 @@ function pickOverlayPath(format) {
 
 function ffprobeDuration(file) {
   try {
-    const out = execSync(
-      `ffprobe -v error -show_entries format=duration -of csv=p=0 "${file}"`
-    )
-      .toString()
-      .trim();
-    return parseFloat(out);
+    return parseFloat(
+      execSync(
+        `ffprobe -v error -show_entries format=duration -of csv=p=0 "${file}"`
+      ).toString()
+    );
   } catch {
     return NaN;
   }
 }
 
-async function downloadWithRetry(
-  url,
-  dest,
-  { tries = 3, minBytes = 10_000, expectType = "" } = {}
-) {
-  let lastErr = null;
-
-  for (let i = 1; i <= tries; i++) {
-    try {
-      const r = await fetch(url, { redirect: "follow" });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-
-      const ct = (r.headers.get("content-type") || "").toLowerCase();
-      const buf = Buffer.from(await r.arrayBuffer());
-
-      if (buf.length < minBytes) throw new Error(`Too small (${buf.length})`);
-      if (ct.includes("text/html") || ct.includes("application/json"))
-        throw new Error(`Bad content-type: ${ct}`);
-      if (expectType && !ct.includes(expectType))
-        throw new Error(`Unexpected content-type: ${ct}`);
-
-      fs.writeFileSync(dest, buf);
-      return;
-    } catch (e) {
-      lastErr = e;
-      await new Promise((r) => setTimeout(r, 250 * i));
-    }
-  }
-
-  throw lastErr;
+async function download(url, dest) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error("download failed");
+  fs.writeFileSync(dest, Buffer.from(await r.arrayBuffer()));
 }
 
-function runFfmpeg(cmd) {
+function run(cmd) {
   return new Promise((resolve, reject) => {
-    exec(cmd, { maxBuffer: 1024 * 1024 * 120 }, (err, stdout, stderr) => {
-      if (err) {
-        return reject({
-          err,
-          stderr: String(stderr || ""),
-          stdout: String(stdout || ""),
-        });
-      }
-      resolve({ stdout: String(stdout || ""), stderr: String(stderr || "") });
+    exec(cmd, { maxBuffer: 1024 * 1024 * 100 }, (err, _, stderr) => {
+      if (err) return reject(stderr);
+      resolve();
     });
   });
 }
@@ -95,85 +72,46 @@ function runFfmpeg(cmd) {
 app.post("/render", async (req, res) => {
   try {
     const { videoId, images, audioUrl, format, theme } = req.body;
-
-    if (!videoId || !Array.isArray(images) || !images.length || !audioUrl) {
-      return res.status(400).json({ error: "Missing inputs" });
-    }
+    if (!videoId || !images?.length || !audioUrl)
+      return res.status(400).json({ error: "missing inputs" });
 
     const dir = `/tmp/${videoId}`;
     fs.mkdirSync(dir, { recursive: true });
 
-    /* ---------- IMAGES ---------- */
+    /* ---------- images ---------- */
     for (let i = 0; i < images.length; i++) {
-      if (!images[i]) {
-        return res.status(400).json({ error: `Missing image at index ${i}` });
-      }
-      await downloadWithRetry(images[i], `${dir}/img${i}.jpg`, {
-        expectType: "image",
-        minBytes: 8000,
-      });
+      await download(images[i], `${dir}/img${i}.jpg`);
     }
 
-    /* ---------- AUDIO ---------- */
-    await downloadWithRetry(audioUrl, `${dir}/audio.wav`, {
-      expectType: "audio",
-      minBytes: 20_000,
-    });
+    /* ---------- narration ---------- */
+    await download(audioUrl, `${dir}/audio.wav`);
+    const narrationDur = ffprobeDuration(`${dir}/audio.wav`);
+    if (!narrationDur) throw "bad narration";
 
-    const audioDuration = ffprobeDuration(`${dir}/audio.wav`);
-    if (!audioDuration || !isFinite(audioDuration)) {
-      return res.status(400).json({ error: "Invalid narration audio" });
-    }
+    const perImage = narrationDur / images.length;
+    const [W, H] = format === "9:16" ? ["1080", "1920"] : ["1920", "1080"];
 
-    const perImage = Math.max(audioDuration / images.length, 3);
-    const size = format === "9:16" ? "1080:1920" : "1920:1080";
-    const [W, H] = size.split(":");
+    /* ---------- ambience ---------- */
+    const ambiencePath = pickAmbiencePath(theme);
+    const useAmbience = Boolean(ambiencePath);
 
-    /* ---------- AMBIENCE (REMOTE) ---------- */
-    let ambienceInput = "";
-    let useAmbience = false;
+    /* ---------- overlay ---------- */
+    const overlayPath = pickOverlayPath(format);
+    const useOverlay = Boolean(overlayPath);
 
-    const ambienceFile = pickAmbienceFilename(theme);
-    if (ambienceFile && process.env.ASSET_BASE_URL) {
-      try {
-        const ambPath = `${dir}/amb.wav`;
-        await downloadWithRetry(
-          `${process.env.ASSET_BASE_URL}/ambience/${ambienceFile}`,
-          ambPath,
-          { expectType: "audio", minBytes: 20_000 }
-        );
-        ambienceInput = ` -stream_loop -1 -i "${ambPath}"`;
-        useAmbience = true;
-      } catch (e) {
-        console.warn("⚠️ ambience disabled:", e?.message || e);
-        useAmbience = false;
-        ambienceInput = "";
-      }
-    }
-
-    /* ---------- OVERLAY (LOCAL) ---------- */
-    let overlayInput = "";
-    let useOverlay = false;
-
-    const ovPath = pickOverlayPath(format);
-    if (ovPath) {
-      // ✅ loop overlay, BUT we will reset timestamps in filter to avoid DTS issues
-      overlayInput = ` -stream_loop -1 -i "${ovPath}"`;
-      useOverlay = true;
-    }
-
-    /* ---------- INPUTS ---------- */
+    /* ---------- inputs ---------- */
     const imageInputs = images
       .map((_, i) => `-loop 1 -t ${perImage} -i "${dir}/img${i}.jpg"`)
       .join(" ");
 
-    const inputs =
-      imageInputs + ` -i "${dir}/audio.wav"` + ambienceInput + overlayInput;
+    let inputs = `${imageInputs} -i "${dir}/audio.wav"`;
+    if (useAmbience) inputs += ` -i "${ambiencePath}"`;
+    if (useOverlay) inputs += ` -i "${overlayPath}"`;
 
-    /* ---------- FILTER GRAPH ---------- */
+    /* ---------- filter ---------- */
     const filters = images.map(
       (_, i) =>
-        `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=30,setpts=PTS-STARTPTS[v${i}]`
+        `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setpts=PTS-STARTPTS[v${i}]`
     );
 
     const concat = images.map((_, i) => `[v${i}]`).join("");
@@ -182,67 +120,44 @@ app.post("/render", async (req, res) => {
       `${filters.join(";")};` +
       `${concat}concat=n=${images.length}:v=1:a=0[vbase]`;
 
-    if (useOverlay) {
-      // indexes:
-      // images = 0..N-1
-      // audio  = N
-      // amb    = N+1 if present
-      // overlay = N+1+(amb?1:0)
-      const overlayIndex = images.length + 1 + (useAmbience ? 1 : 0);
+    let videoLabel = "[vbase]";
+    let audioLabel = `[${images.length}:a]`;
 
-      // ✅ IMPORTANT: reset overlay timestamps to avoid loop DTS issues
+    if (useOverlay) {
+      const ovIndex = images.length + 1 + (useAmbience ? 1 : 0);
       filter +=
-        `;[vbase]format=rgba,setpts=PTS-STARTPTS[base]` +
-        `;[${overlayIndex}:v]scale=${W}:${H},format=rgba,setpts=PTS-STARTPTS,colorchannelmixer=aa=0.15[fx]` +
-        `;[base][fx]overlay=eof_action=repeat:shortest=1,format=yuv420p[v]`;
-    } else {
-      filter += `;[vbase]format=yuv420p[v]`;
+        `;[vbase]format=rgba[base]` +
+        `;[${ovIndex}:v]scale=${W}:${H},format=rgba,colorchannelmixer=aa=0.15[fx]` +
+        `;[base][fx]overlay=shortest=1[v]`;
+      videoLabel = "[v]";
     }
 
     if (useAmbience) {
+      const ambIndex = images.length + 1;
       filter +=
-        `;[${images.length + 1}:a]volume=0.2[amb]` +
-        `;[${images.length}:a][amb]amix=inputs=2:duration=first[a]`;
-    } else {
-      filter += `;[${images.length}:a]anull[a]`;
+        `;[${ambIndex}:a]volume=0.2[amb]` +
+        `;${audioLabel}[amb]amix=inputs=2:duration=first[a]`;
+      audioLabel = "[a]";
     }
 
-    /* ---------- EXEC ---------- */
-    const out = `${dir}/out.mp4`;
+    filter += `;${videoLabel}format=yuv420p[vout]`;
 
+    /* ---------- run ---------- */
+    const out = `${dir}/out.mp4`;
     const cmd =
-      `ffmpeg -y -fflags +genpts -avoid_negative_ts make_zero ${inputs} ` +
-      `-filter_complex "${filter}" ` +
-      `-map "[v]" -map "[a]" -shortest -r 30 ` +
+      `ffmpeg -y ${inputs} -filter_complex "${filter}" ` +
+      `-map "[vout]" -map "${audioLabel}" -shortest -r 30 ` +
       `-c:v libx264 -preset veryfast -crf 28 -pix_fmt yuv420p ` +
       `-movflags +faststart -c:a aac -b:a 128k "${out}"`;
 
-    console.log("🎬 ffmpeg cmd:", cmd);
-
-    try {
-      await runFfmpeg(cmd);
-    } catch (ff) {
-      const tail = String(ff?.stderr || "").slice(-4000);
-      console.error("❌ ffmpeg failed stderr tail:\n", tail);
-      return res.status(500).json({
-        error: "render failed",
-        details: tail || "ffmpeg failed (no stderr)",
-      });
-    }
-
-    const buf = fs.readFileSync(out);
-    if (!buf?.length) {
-      return res.status(500).json({ error: "render failed", details: "empty mp4" });
-    }
+    console.log("🎬 FFmpeg:", cmd);
+    await run(cmd);
 
     res.setHeader("Content-Type", "video/mp4");
-    res.send(buf);
+    res.send(fs.readFileSync(out));
   } catch (e) {
-    console.error("🔥 Server crash:", e);
-    res.status(500).json({
-      error: "server crash",
-      details: String(e?.message || e),
-    });
+    console.error("🔥 render failed:", e);
+    res.status(500).json({ error: "render failed", details: String(e) });
   }
 });
 
