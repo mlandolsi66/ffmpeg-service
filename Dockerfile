@@ -39,8 +39,16 @@ RUN mkdir -p overlays/9x16 overlays/16x9 && \
   done
 
 # ---------- verify overlays (FAIL BUILD IF BAD) ----------
-RUN ffprobe -v error overlays/9x16/*.mp4 && \
-    ffprobe -v error overlays/16x9/*.mp4
+# ---------- verify overlays (FAIL BUILD IF BAD) ----------
+RUN for f in overlays/9x16/*.mp4; do \
+      echo "Verifying $f"; \
+      ffprobe -v error "$f"; \
+    done && \
+    for f in overlays/16x9/*.mp4; do \
+      echo "Verifying $f"; \
+      ffprobe -v error "$f"; \
+    done
+
 
 EXPOSE 3000
 CMD ["node", "server.js"]
