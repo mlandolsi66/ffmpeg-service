@@ -145,7 +145,9 @@ app.post("/render", async (req, res) => {
 
     const overlayPath = pickOverlayPath(format);
     if (overlayPath) {
-      overlayInput = ` -stream_loop -1 -i "${overlayPath}"`;
+     /* overlayInput = ` -stream_loop -1 -i "${overlayPath}"`; */
+      overlayInput = `-i "${ovPath}"`;
+
       useOverlay = true;
     }
 
@@ -176,8 +178,10 @@ app.post("/render", async (req, res) => {
       const overlayIndex = images.length + 1 + (useAmbience ? 1 : 0);
       filter +=
         `;[vbase]format=rgba[base]` +
-        `;[${overlayIndex}:v]format=rgba,colorchannelmixer=aa=0.15[fx]` +
+        `;[${overlayIndex}:v]loop=loop=-1:size=300:start=0,scale=${W}:${H},format=rgba,colorchannelmixer=aa=0.15[fx]` +
         `;[base][fx]overlay=shortest=1,format=yuv420p[v]`;
+
+      
     } else {
       filter += `;[vbase]format=yuv420p[v]`;
     }
