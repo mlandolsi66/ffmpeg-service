@@ -46,7 +46,7 @@ async function downloadWithRetry(
   dest,
   { tries = 3, minBytes = 10_000, expectType = "" } = {}
 ) {
-  let lastErr = null;
+  let lastErr;
 
   for (let i = 1; i <= tries; i++) {
     try {
@@ -85,10 +85,9 @@ function runFfmpeg(cmd) {
 /* ------------------ RENDER ------------------ */
 
 app.post("/render", async (req, res) => {
-  const started = Date.now();
-
   try {
     const { videoId, images, audioUrl, format, theme } = req.body;
+
     if (!videoId || !Array.isArray(images) || !images.length || !audioUrl) {
       return res.status(400).json({ error: "Missing inputs" });
     }
@@ -111,7 +110,7 @@ app.post("/render", async (req, res) => {
     });
 
     const audioDuration = ffprobeDuration(`${dir}/audio.wav`);
-    if (!audioDuration || !isFinite(audioDuration)) {
+    if (!isFinite(audioDuration)) {
       return res.status(400).json({ error: "Invalid narration audio" });
     }
 
@@ -119,7 +118,7 @@ app.post("/render", async (req, res) => {
     const size = format === "9:16" ? "1080:1920" : "1920:1080";
     const [W, H] = size.split(":");
 
-    /* ---------- AMBIENCE (REMOTE, SAME AS BEFORE) ---------- */
+    /* ---------- AMBIENCE (REMOTE) ---------- */
     let ambienceInput = "";
     let useAmbience = false;
 
@@ -139,19 +138,19 @@ app.post("/render", async (req, res) => {
       }
     }
 
-    /* ---------- OVERLAY (LOCAL ONLY, SAME LOGIC) ---------- */
+    /* ---------- OVERLAY (LOCAL, FIXED) ---------- */
     let overlayInput = "";
     let useOverlay = false;
+    let ovPath = null;
 
     const overlayPath = pickOverlayPath(format);
     if (overlayPath) {
-     /* overlayInput = ` -stream_loop -1 -i "${overlayPath}"`; */
-      overlayInput = `-i "${ovPath}"`;
-
+      ovPath = overlayPath;
+      overlayInput = ` -i "${ovPath}"`;
       useOverlay = true;
     }
 
-    /* ---------- INPUTS (UNCHANGED) ---------- */
+    /* ---------- INPUTS ---------- */
     const imageInputs = images
       .map((_, i) => `-loop 1 -t ${perImage} -i "${dir}/img${i}.jpg"`)
       .join(" ");
@@ -162,7 +161,7 @@ app.post("/render", async (req, res) => {
       ambienceInput +
       overlayInput;
 
-    /* ---------- FILTER GRAPH (UNCHANGED ALGORITHM) ---------- */
+    /* ---------- FILTER GRAPH ---------- */
     const filters = images.map(
       (_, i) =>
         `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setpts=PTS-STARTPTS[v${i}]`
@@ -176,12 +175,11 @@ app.post("/render", async (req, res) => {
 
     if (useOverlay) {
       const overlayIndex = images.length + 1 + (useAmbience ? 1 : 0);
+
       filter +=
         `;[vbase]format=rgba[base]` +
-        `;[${overlayIndex}:v]loop=loop=-1:size=300:start=0,scale=${W}:${H},format=rgba,colorchannelmixer=aa=0.15[fx]` +
+        `;[${overlayIndex}:v]scale=${W}:${H},format=rgba,colorchannelmixer=aa=0.15[fx]` +
         `;[base][fx]overlay=shortest=1,format=yuv420p[v]`;
-
-      
     } else {
       filter += `;[vbase]format=yuv420p[v]`;
     }
