@@ -4,8 +4,22 @@ import { exec, execSync } from "child_process";
 import fs from "fs";
 import path from "path";
 
+
 const app = express();
 app.use(express.json({ limit: "50mb" }));
+
+function logDir(label, dir) {
+  try {
+    const files = fs.readdirSync(dir);
+    console.log(`📂 ${label} (${dir}):`, files);
+  } catch (e) {
+    console.warn(`⚠️ Missing ${label} (${dir})`);
+  }
+}
+
+logDir("9x16 overlays", "overlays/9x16");
+logDir("16x9 overlays", "overlays/16x9");
+logDir("ambience", "ambience");
 
 /* ------------------ HELPERS ------------------ */
 
