@@ -22,7 +22,7 @@ function pickOverlayPath(format) {
   const base = format === "9:16" ? "overlays/9x16" : "overlays/16x9";
   if (!fs.existsSync(base)) return null;
 
-  const files = fs.readdirSync(base).filter(f => f.endsWith(".mp4"));
+  const files = fs.readdirSync(base).filter((f) => f.endsWith(".mp4"));
   if (!files.length) return null;
 
   return `${base}/${files[Math.floor(Math.random() * files.length)]}`;
@@ -34,7 +34,9 @@ function ffprobeDuration(file) {
   try {
     const out = execSync(
       `ffprobe -v error -show_entries format=duration -of csv=p=0 "${file}"`
-    ).toString().trim();
+    )
+      .toString()
+      .trim();
     return parseFloat(out);
   } catch {
     return NaN;
@@ -46,35 +48,44 @@ async function downloadWithRetry(
   dest,
   { tries = 3, minBytes = 10_000, expectType = "" } = {}
 ) {
-  let lastErr;
+  let lastErr = null;
+
   for (let i = 1; i <= tries; i++) {
     try {
       const r = await fetch(url, { redirect: "follow" });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
+
       const ct = (r.headers.get("content-type") || "").toLowerCase();
       const buf = Buffer.from(await r.arrayBuffer());
 
-      if (buf.length < minBytes) throw new Error("file too small");
+      if (buf.length < minBytes) throw new Error(`Too small (${buf.length})`);
       if (ct.includes("text/html") || ct.includes("application/json"))
-        throw new Error("bad content-type");
+        throw new Error(`Bad content-type: ${ct}`);
       if (expectType && !ct.includes(expectType))
-        throw new Error("unexpected content-type");
+        throw new Error(`Unexpected content-type: ${ct}`);
 
       fs.writeFileSync(dest, buf);
       return;
     } catch (e) {
       lastErr = e;
-      await new Promise(r => setTimeout(r, 250 * i));
+      await new Promise((r) => setTimeout(r, 250 * i));
     }
   }
+
   throw lastErr;
 }
 
 function runFfmpeg(cmd) {
   return new Promise((resolve, reject) => {
-    exec(cmd, { maxBuffer: 1024 * 1024 * 80 }, (err, stdout, stderr) => {
-      if (err) return reject({ err, stderr });
-      resolve();
+    exec(cmd, { maxBuffer: 1024 * 1024 * 120 }, (err, stdout, stderr) => {
+      if (err) {
+        return reject({
+          err,
+          stderr: String(stderr || ""),
+          stdout: String(stdout || ""),
+        });
+      }
+      resolve({ stdout: String(stdout || ""), stderr: String(stderr || "") });
     });
   });
 }
@@ -84,7 +95,8 @@ function runFfmpeg(cmd) {
 app.post("/render", async (req, res) => {
   try {
     const { videoId, images, audioUrl, format, theme } = req.body;
-    if (!videoId || !images?.length || !audioUrl) {
+
+    if (!videoId || !Array.isArray(images) || !images.length || !audioUrl) {
       return res.status(400).json({ error: "Missing inputs" });
     }
 
@@ -93,48 +105,59 @@ app.post("/render", async (req, res) => {
 
     /* ---------- IMAGES ---------- */
     for (let i = 0; i < images.length; i++) {
+      if (!images[i]) {
+        return res.status(400).json({ error: `Missing image at index ${i}` });
+      }
       await downloadWithRetry(images[i], `${dir}/img${i}.jpg`, {
         expectType: "image",
-        minBytes: 8000
+        minBytes: 8000,
       });
     }
 
     /* ---------- AUDIO ---------- */
     await downloadWithRetry(audioUrl, `${dir}/audio.wav`, {
       expectType: "audio",
-      minBytes: 20_000
+      minBytes: 20_000,
     });
 
     const audioDuration = ffprobeDuration(`${dir}/audio.wav`);
-    const perImage = Math.max(audioDuration / images.length, 3);
+    if (!audioDuration || !isFinite(audioDuration)) {
+      return res.status(400).json({ error: "Invalid narration audio" });
+    }
 
+    const perImage = Math.max(audioDuration / images.length, 3);
     const size = format === "9:16" ? "1080:1920" : "1920:1080";
     const [W, H] = size.split(":");
 
-    /* ---------- AMBIENCE ---------- */
+    /* ---------- AMBIENCE (REMOTE) ---------- */
     let ambienceInput = "";
     let useAmbience = false;
-    const ambFile = pickAmbienceFilename(theme);
 
-    if (ambFile && process.env.ASSET_BASE_URL) {
+    const ambienceFile = pickAmbienceFilename(theme);
+    if (ambienceFile && process.env.ASSET_BASE_URL) {
       try {
         const ambPath = `${dir}/amb.wav`;
         await downloadWithRetry(
-          `${process.env.ASSET_BASE_URL}/ambience/${ambFile}`,
+          `${process.env.ASSET_BASE_URL}/ambience/${ambienceFile}`,
           ambPath,
           { expectType: "audio", minBytes: 20_000 }
         );
         ambienceInput = ` -stream_loop -1 -i "${ambPath}"`;
         useAmbience = true;
-      } catch {}
+      } catch (e) {
+        console.warn("⚠️ ambience disabled:", e?.message || e);
+        useAmbience = false;
+        ambienceInput = "";
+      }
     }
 
-    /* ---------- OVERLAY (LOCAL + LOOPED) ---------- */
+    /* ---------- OVERLAY (LOCAL) ---------- */
     let overlayInput = "";
     let useOverlay = false;
 
     const ovPath = pickOverlayPath(format);
     if (ovPath) {
+      // ✅ loop overlay, BUT we will reset timestamps in filter to avoid DTS issues
       overlayInput = ` -stream_loop -1 -i "${ovPath}"`;
       useOverlay = true;
     }
@@ -145,15 +168,12 @@ app.post("/render", async (req, res) => {
       .join(" ");
 
     const inputs =
-      imageInputs +
-      ` -i "${dir}/audio.wav"` +
-      ambienceInput +
-      overlayInput;
+      imageInputs + ` -i "${dir}/audio.wav"` + ambienceInput + overlayInput;
 
     /* ---------- FILTER GRAPH ---------- */
     const filters = images.map(
       (_, i) =>
-        `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setpts=PTS-STARTPTS[v${i}]`
+        `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=30,setpts=PTS-STARTPTS[v${i}]`
     );
 
     const concat = images.map((_, i) => `[v${i}]`).join("");
@@ -163,11 +183,18 @@ app.post("/render", async (req, res) => {
       `${concat}concat=n=${images.length}:v=1:a=0[vbase]`;
 
     if (useOverlay) {
+      // indexes:
+      // images = 0..N-1
+      // audio  = N
+      // amb    = N+1 if present
+      // overlay = N+1+(amb?1:0)
       const overlayIndex = images.length + 1 + (useAmbience ? 1 : 0);
+
+      // ✅ IMPORTANT: reset overlay timestamps to avoid loop DTS issues
       filter +=
-        `;[vbase]format=rgba[base]` +
-        `;[${overlayIndex}:v]scale=${W}:${H},format=rgba,colorchannelmixer=aa=0.15[fx]` +
-        `;[base][fx]overlay,format=yuv420p[v]`;
+        `;[vbase]format=rgba,setpts=PTS-STARTPTS[base]` +
+        `;[${overlayIndex}:v]scale=${W}:${H},format=rgba,setpts=PTS-STARTPTS,colorchannelmixer=aa=0.15[fx]` +
+        `;[base][fx]overlay=eof_action=repeat:shortest=1,format=yuv420p[v]`;
     } else {
       filter += `;[vbase]format=yuv420p[v]`;
     }
@@ -184,20 +211,38 @@ app.post("/render", async (req, res) => {
     const out = `${dir}/out.mp4`;
 
     const cmd =
-      `ffmpeg -y ${inputs} ` +
+      `ffmpeg -y -fflags +genpts -avoid_negative_ts make_zero ${inputs} ` +
       `-filter_complex "${filter}" ` +
       `-map "[v]" -map "[a]" -shortest -r 30 ` +
       `-c:v libx264 -preset veryfast -crf 28 -pix_fmt yuv420p ` +
       `-movflags +faststart -c:a aac -b:a 128k "${out}"`;
 
-    await runFfmpeg(cmd);
+    console.log("🎬 ffmpeg cmd:", cmd);
+
+    try {
+      await runFfmpeg(cmd);
+    } catch (ff) {
+      const tail = String(ff?.stderr || "").slice(-4000);
+      console.error("❌ ffmpeg failed stderr tail:\n", tail);
+      return res.status(500).json({
+        error: "render failed",
+        details: tail || "ffmpeg failed (no stderr)",
+      });
+    }
+
+    const buf = fs.readFileSync(out);
+    if (!buf?.length) {
+      return res.status(500).json({ error: "render failed", details: "empty mp4" });
+    }
 
     res.setHeader("Content-Type", "video/mp4");
-    res.send(fs.readFileSync(out));
-
+    res.send(buf);
   } catch (e) {
     console.error("🔥 Server crash:", e);
-    res.status(500).json({ error: "render failed", details: String(e) });
+    res.status(500).json({
+      error: "server crash",
+      details: String(e?.message || e),
+    });
   }
 });
 
