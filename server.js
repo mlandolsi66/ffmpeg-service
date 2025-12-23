@@ -206,7 +206,7 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     const ambIdx = voiceIdx + 1;
     const overlayIdx = ambIdx + 1;
 
-    /* ---------- FILTER GRAPH (WITH KEN BURNS - FIXED) ---------- */
+    /* ---------- FILTER GRAPH (WITH KEN BURNS - FIXED CONCAT) ---------- */
     const zoomFactor = 1.15; // 15% zoom (1.15), or 1.2 for more dramatic
     const totalFrames = Math.floor(perImage * fps); // Convert seconds to frames
 
@@ -223,6 +223,7 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
             `[${i}:v]scale=${W * 1.3}:${H * 1.3}:force_original_aspect_ratio=increase,` +
             `crop=${W * 1.3}:${H * 1.3},` +
             `zoompan=z='min(1.0+on*${zoomIncrement},${zoomFactor})':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${W}x${H}:fps=${fps},` +
+            `trim=duration=${perImage},` + // ← FORCE EXACT DURATION
             `format=yuv420p,setpts=PTS-STARTPTS[v${i}]`
           );
         } else {
@@ -232,6 +233,7 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
             `[${i}:v]scale=${W * 1.3}:${H * 1.3}:force_original_aspect_ratio=increase,` +
             `crop=${W * 1.3}:${H * 1.3},` +
             `zoompan=z='max(${zoomFactor}-on*${zoomDecrement},1.0)':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${W}x${H}:fps=${fps},` +
+            `trim=duration=${perImage},` + // ← FORCE EXACT DURATION
             `format=yuv420p,setpts=PTS-STARTPTS[v${i}]`
           );
         }
@@ -242,8 +244,8 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     filter +=
       ";" +
       images.map((_, i) => `[v${i}]`).join("") +
-      `concat=n=${images.length}:v=1:a=0,` +
-      `trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
+      `concat=n=${images.length}:v=1:a=0[vconcat];` +
+      `[vconcat]trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
 
     if (overlayPath) {
       filter +=
