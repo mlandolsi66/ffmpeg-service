@@ -271,9 +271,10 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     const ambIdx = voiceIdx + 1;
     const overlayIdx = ambIdx + 1;
 
-    /* ---------- FILTER GRAPH (WITH KEN BURNS - FIXED CONCAT) ---------- */
+    /* ---------- FILTER GRAPH (WITH KEN BURNS + CROSSFADE) ---------- */
     const zoomFactor = 1.15; // 15% zoom (1.15), or 1.2 for more dramatic
     const totalFrames = Math.floor(perImage * fps); // Convert seconds to frames
+    const fadeDuration = 0.5; // 0.5 second crossfade between scenes
 
     // Process each image with Ken Burns zoom
     let filter = images
@@ -288,7 +289,7 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
             `[${i}:v]scale=${W * 1.3}:${H * 1.3}:force_original_aspect_ratio=increase,` +
             `crop=${W * 1.3}:${H * 1.3},` +
             `zoompan=z='min(1.0+on*${zoomIncrement},${zoomFactor})':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${W}x${H}:fps=${fps},` +
-            `trim=duration=${perImage},` + // ← FORCE EXACT DURATION
+            `trim=duration=${perImage},` +
             `format=yuv420p,setpts=PTS-STARTPTS[v${i}]`
           );
         } else {
@@ -298,33 +299,56 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
             `[${i}:v]scale=${W * 1.3}:${H * 1.3}:force_original_aspect_ratio=increase,` +
             `crop=${W * 1.3}:${H * 1.3},` +
             `zoompan=z='max(${zoomFactor}-on*${zoomDecrement},1.0)':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${W}x${H}:fps=${fps},` +
-            `trim=duration=${perImage},` + // ← FORCE EXACT DURATION
+            `trim=duration=${perImage},` +
             `format=yuv420p,setpts=PTS-STARTPTS[v${i}]`
           );
         }
       })
       .join(";");
 
-    // Concatenate all zoomed scenes
-    const endCardIdx = images.length; // End card input index
-
-    if (endCardPath) {
-      // Process end card (no zoom, just scale)
-      filter += `;[${endCardIdx}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=${fps},format=yuv420p,setpts=PTS-STARTPTS[vendcard]`;
+    // Apply crossfade between scenes
+    const endCardIdx = images.length;
+    
+    // Build crossfade chain
+    if (images.length > 1) {
+      // Start with first video
+      filter += `;[v0]`;
       
-      // Concat story scenes + end card
-      filter +=
-        ";" +
-        images.map((_, i) => `[v${i}]`).join("") +
-        `[vendcard]concat=n=${images.length + 1}:v=1:a=0[vconcat];` +
-        `[vconcat]trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
+      // Chain crossfades for story scenes
+      for (let i = 1; i < images.length; i++) {
+        if (i === 1) {
+          // First crossfade: [v0] + [v1]
+          filter += `[v${i}]xfade=transition=fade:duration=${fadeDuration}:offset=${perImage - fadeDuration}[vf${i}]`;
+        } else {
+          // Subsequent crossfades: [vfN-1] + [vN]
+          filter += `;[vf${i-1}][v${i}]xfade=transition=fade:duration=${fadeDuration}:offset=${(perImage * i) - (fadeDuration * i)}[vf${i}]`;
+        }
+      }
+      
+      const lastFadeIdx = images.length - 1;
+      
+      if (endCardPath) {
+        // Process end card (no zoom, just scale)
+        filter += `;[${endCardIdx}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=${fps},format=yuv420p,setpts=PTS-STARTPTS[vendcard]`;
+        
+        // Crossfade into end card
+        const endCardOffset = (perImage * images.length) - (fadeDuration * images.length);
+        filter += `;[vf${lastFadeIdx}][vendcard]xfade=transition=fade:duration=${fadeDuration}:offset=${endCardOffset}[vfinal]`;
+        filter += `;[vfinal]trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
+      } else {
+        // No end card, just trim final crossfade
+        filter += `;[vf${lastFadeIdx}]trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
+      }
     } else {
-      // Concat story scenes only
-      filter +=
-        ";" +
-        images.map((_, i) => `[v${i}]`).join("") +
-        `concat=n=${images.length}:v=1:a=0[vconcat];` +
-        `[vconcat]trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
+      // Single scene - no crossfade needed
+      if (endCardPath) {
+        filter += `;[${endCardIdx}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=${fps},format=yuv420p,setpts=PTS-STARTPTS[vendcard]`;
+        const endCardOffset = perImage - fadeDuration;
+        filter += `;[v0][vendcard]xfade=transition=fade:duration=${fadeDuration}:offset=${endCardOffset}[vfinal]`;
+        filter += `;[vfinal]trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
+      } else {
+        filter += `;[v0]trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
+      }
     }
 
     if (overlayPath) {
