@@ -17,6 +17,14 @@ console.log("🚀 Server starting");
 console.log("📂 process.cwd() =", process.cwd());
 console.log("📂 __dirname =", __dirname);
 
+/* ------------------ SUPABASE CONFIG ------------------ */
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+  console.warn("⚠️ Supabase credentials missing - uploads will fail");
+}
+
 /* ------------------ AMBIENCE (ALWAYS) ------------------ */
 function pickAmbience(theme = "") {
   const t = String(theme).toLowerCase();
@@ -29,17 +37,14 @@ function pickAmbience(theme = "") {
 /* ------------------ OVERLAY ------------------ */
 function pickOverlay(format) {
   const base = path.join(__dirname, "overlays");
-  const dir =
-    format === "9:16"
-      ? path.join(base, "9x16")
-      : path.join(base, "16x9");
+  const dir = format === "9:16" ? path.join(base, "9x16") : path.join(base, "16x9");
 
   if (!fs.existsSync(dir)) {
     console.log("⚠️ Overlay dir missing:", dir);
     return null;
   }
 
-  const files = fs.readdirSync(dir).filter(f => f.endsWith(".mp4"));
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith(".mp4"));
   console.log("🎞 Overlay files:", files);
 
   return files.length ? path.join(dir, files[0]) : null;
@@ -75,19 +80,80 @@ function run(cmd) {
   );
 }
 
-/* ------------------ RENDER ------------------ */
-app.post("/render", async (req, res) => {
+/* ------------------ SUPABASE UPLOAD ------------------ */
+async function uploadToSupabase(videoId, buffer) {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+    throw new Error("Supabase credentials not configured");
+  }
+
+  const path = `final/${videoId}.mp4`;
+  const uploadUrl = `${SUPABASE_URL}/storage/v1/object/videos/${path}`;
+
+  console.log("📤 Uploading to Supabase:", path);
+
+  const uploadRes = await fetch(uploadUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      "Content-Type": "video/mp4",
+      "x-upsert": "true",
+    },
+    body: buffer,
+  });
+
+  if (!uploadRes.ok) {
+    const err = await uploadRes.text();
+    throw new Error(`Supabase upload failed: ${err}`);
+  }
+
+  const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/videos/${path}`;
+  console.log("✅ Uploaded:", publicUrl);
+
+  return publicUrl;
+}
+
+/* ------------------ UPDATE DB ------------------ */
+async function updateVideoStatus(videoId, status, videoUrl = null) {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+    console.warn("⚠️ Cannot update DB - no Supabase credentials");
+    return;
+  }
+
+  const updateUrl = `${SUPABASE_URL}/rest/v1/videos?id=eq.${videoId}`;
+
+  const payload = { status };
+  if (videoUrl) {
+    payload.video_url = videoUrl;
+    payload.final = true;
+  }
+
+  console.log("📝 Updating DB:", payload);
+
+  const res = await fetch(updateUrl, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+      apikey: SUPABASE_SERVICE_KEY,
+      "Content-Type": "application/json",
+      Prefer: "return=minimal",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    console.error("❌ DB update failed:", err);
+    throw new Error(`DB update failed: ${err}`);
+  }
+
+  console.log("✅ DB updated");
+}
+
+/* ------------------ RENDER (ASYNC) ------------------ */
+async function renderVideo(videoId, images, audioUrl, format, theme) {
+  const dir = `/tmp/${videoId}`;
+
   try {
-    const { videoId, images, audioUrl, format = "9:16", theme = "" } = req.body;
-
-    console.log("🎬 Render request:", { videoId, format, theme });
-    console.log("🖼 Images:", images?.length);
-
-    if (!videoId || !images?.length || !audioUrl) {
-      return res.status(400).json({ error: "Missing inputs" });
-    }
-
-    const dir = `/tmp/${videoId}`;
     fs.mkdirSync(dir, { recursive: true });
 
     /* ---------- DOWNLOAD ---------- */
@@ -103,7 +169,7 @@ app.post("/render", async (req, res) => {
     console.log("🎧 Ambience file:", ambPath);
 
     if (!fs.existsSync(ambPath)) {
-      console.log(
+      console.error(
         "❌ Ambience dir contents:",
         fs.existsSync(path.join(__dirname, "ambience"))
           ? fs.readdirSync(path.join(__dirname, "ambience"))
@@ -187,16 +253,76 @@ app.post("/render", async (req, res) => {
 
     await run(ffmpeg);
 
-    res.setHeader("Content-Type", "video/mp4");
-    res.send(fs.readFileSync(out));
+    /* ---------- UPLOAD TO SUPABASE ---------- */
+    const buffer = fs.readFileSync(out);
+    const publicUrl = await uploadToSupabase(videoId, buffer);
 
+    /* ---------- UPDATE DB ---------- */
+    await updateVideoStatus(videoId, "done", publicUrl);
+
+    console.log("✅ Render complete:", publicUrl);
+
+    /* ---------- CLEANUP ---------- */
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    return publicUrl;
   } catch (e) {
-    console.error("🔥 render failed:", e);
+    console.error("🔥 Render failed:", e);
+
+    // Update DB to failed status
+    try {
+      await updateVideoStatus(videoId, "failed");
+    } catch (dbErr) {
+      console.error("❌ Could not update DB to failed:", dbErr);
+    }
+
+    // Cleanup on failure
+    if (fs.existsSync(dir)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+
+    throw e;
+  }
+}
+
+/* ------------------ ENDPOINT ------------------ */
+app.post("/render", async (req, res) => {
+  try {
+    const { videoId, images, audioUrl, format = "9:16", theme = "" } = req.body;
+
+    console.log("🎬 Render request:", { videoId, format, theme });
+    console.log("🖼 Images:", images?.length);
+
+    if (!videoId || !images?.length || !audioUrl) {
+      return res.status(400).json({ error: "Missing inputs" });
+    }
+
+    // Update status to rendering
+    await updateVideoStatus(videoId, "rendering");
+
+    // Return immediately - render happens async
+    res.status(202).json({
+      success: true,
+      message: "Rendering started",
+      videoId,
+    });
+
+    // Start render in background
+    renderVideo(videoId, images, audioUrl, format, theme).catch((e) => {
+      console.error("🔥 Background render failed:", e);
+    });
+  } catch (e) {
+    console.error("🔥 /render endpoint failed:", e);
     res.status(500).json({
       error: "render failed",
-      details: String(e.message || e)
+      details: String(e.message || e),
     });
   }
+});
+
+/* ------------------ HEALTH CHECK ------------------ */
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
 app.listen(8080, "0.0.0.0", () =>
