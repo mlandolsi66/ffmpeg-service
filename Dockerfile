@@ -25,7 +25,7 @@ COPY server.js ./
 # ---------- Copy RAW assets ----------
 COPY overlays ./overlays
 COPY ambience ./ambience
-
+COPY endcards ./endcards   
 # ---------- Normalize overlays at BUILD TIME ----------
 RUN mkdir -p overlays/9x16 overlays/16x9 && \
     echo "🔧 Normalizing 9:16 overlays..." && \
@@ -63,6 +63,8 @@ RUN echo "🔍 Verifying assets..." && \
     test -d overlays/9x16 || (echo "❌ overlays/9x16 missing" && exit 1) && \
     test -d overlays/16x9 || (echo "❌ overlays/16x9 missing" && exit 1) && \
     test -d ambience || (echo "❌ ambience directory missing" && exit 1) && \
+    test -d endcards || (echo "❌ endcards directory missing" && exit 1) && \
+    ls endcards/*.jpg || echo "⚠️  No endcard files found (optional)"
     ls overlays/9x16/*.mp4 || (echo "❌ No 9:16 overlays found" && exit 1) && \
     ls overlays/16x9/*.mp4 || (echo "❌ No 16:9 overlays found" && exit 1) && \
     ls ambience/*.wav || (echo "❌ No ambience files found" && exit 1) && \
