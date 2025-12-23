@@ -34,6 +34,23 @@ function pickAmbience(theme = "") {
   return "lullaby.wav";
 }
 
+/* ------------------ END CARD ------------------ */
+function getEndCard(format) {
+  const endCardPath = path.join(
+    __dirname,
+    "endcards",
+    format === "9:16" ? "endcard_9x16.jpg" : "endcard_16x9.jpg"
+  );
+
+  if (fs.existsSync(endCardPath)) {
+    console.log("🎬 Using end card:", endCardPath);
+    return endCardPath;
+  }
+
+  console.log("⚠️ End card not found, skipping");
+  return null;
+}
+
 /* ------------------ OVERLAY (THEME-BASED) ------------------ */
 function pickOverlay(format, theme = "") {
   const base = path.join(__dirname, "overlays");
@@ -217,12 +234,19 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     /* ---------- OVERLAY ---------- */
     const overlayPath = pickOverlay(format, theme);
 
+    /* ---------- END CARD ---------- */
+    const endCardPath = getEndCard(format);
+    const endCardDuration = 2.5; // 2.5 seconds end card
+
     /* ---------- DURATIONS ---------- */
     const audioDur = ffprobeDuration(`${dir}/voice.wav`);
     console.log("⏱ Narration duration:", audioDur);
 
+    const storyDuration = endCardPath ? audioDur - endCardDuration : audioDur;
+    const numStoryImages = images.length;
+    const perImage = Math.max(storyDuration / numStoryImages, 3);
+    
     const fps = 25;
-    const perImage = Math.max(audioDur / images.length, 3);
     const [W, H] = format === "9:16" ? [1080, 1920] : [1920, 1080];
 
     /* ---------- INPUTS (LOCKED ORDER) ---------- */
@@ -233,12 +257,17 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
       )
       .join(" ");
 
+    // Add end card if available
+    if (endCardPath) {
+      cmdInputs += ` -loop 1 -framerate ${fps} -t ${endCardDuration} -i "${endCardPath}"`;
+    }
+
     cmdInputs += ` -i "${dir}/voice.wav"`;
     cmdInputs += ` -i "${ambPath}"`;
 
     if (overlayPath) cmdInputs += ` -stream_loop -1 -i "${overlayPath}"`;
 
-    const voiceIdx = images.length;
+    const voiceIdx = images.length + (endCardPath ? 1 : 0);
     const ambIdx = voiceIdx + 1;
     const overlayIdx = ambIdx + 1;
 
@@ -277,11 +306,26 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
       .join(";");
 
     // Concatenate all zoomed scenes
-    filter +=
-      ";" +
-      images.map((_, i) => `[v${i}]`).join("") +
-      `concat=n=${images.length}:v=1:a=0[vconcat];` +
-      `[vconcat]trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
+    const endCardIdx = images.length; // End card input index
+
+    if (endCardPath) {
+      // Process end card (no zoom, just scale)
+      filter += `;[${endCardIdx}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=${fps},format=yuv420p,setpts=PTS-STARTPTS[vendcard]`;
+      
+      // Concat story scenes + end card
+      filter +=
+        ";" +
+        images.map((_, i) => `[v${i}]`).join("") +
+        `[vendcard]concat=n=${images.length + 1}:v=1:a=0[vconcat];` +
+        `[vconcat]trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
+    } else {
+      // Concat story scenes only
+      filter +=
+        ";" +
+        images.map((_, i) => `[v${i}]`).join("") +
+        `concat=n=${images.length}:v=1:a=0[vconcat];` +
+        `[vconcat]trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
+    }
 
     if (overlayPath) {
       filter +=
