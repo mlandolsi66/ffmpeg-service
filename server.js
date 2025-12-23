@@ -206,26 +206,35 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     const ambIdx = voiceIdx + 1;
     const overlayIdx = ambIdx + 1;
 
-    /* ---------- FILTER GRAPH (WITH KEN BURNS) ---------- */
-    // Ken Burns settings
-    const zoomDuration = perImage; // Each scene's duration
-    const zoomFactor = 1.15; // 1.15 = 15% zoom (subtle), 1.3 = 30% (dramatic)
+    /* ---------- FILTER GRAPH (WITH KEN BURNS - FIXED) ---------- */
+    const zoomFactor = 1.15; // 15% zoom (1.15), or 1.2 for more dramatic
+    const totalFrames = Math.floor(perImage * fps); // Convert seconds to frames
 
     // Process each image with Ken Burns zoom
     let filter = images
       .map((_, i) => {
-        // Alternate between zoom in and zoom out for variety
+        // Alternate zoom direction for variety
         const zoomIn = i % 2 === 0;
-        const startScale = zoomIn ? 1.0 : zoomFactor;
-        const endScale = zoomIn ? zoomFactor : 1.0;
-
-        return (
-          `[${i}:v]scale=${W * 1.2}:${H * 1.2}:force_original_aspect_ratio=increase,` +
-          `crop=${W * 1.2}:${H * 1.2}:(iw-ow)/2:(ih-oh)/2,` + // Center crop with padding
-          `zoompan=z='if(lte(zoom,1.0),${startScale},zoom+${(endScale - startScale) / (zoomDuration * fps)})':` +
-          `d=${zoomDuration * fps}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':fps=${fps}:s=${W}x${H},` +
-          `format=yuv420p,setpts=PTS-STARTPTS[v${i}]`
-        );
+        
+        if (zoomIn) {
+          // ZOOM IN: Start at 1.0, end at zoomFactor
+          const zoomIncrement = (zoomFactor - 1.0) / totalFrames;
+          return (
+            `[${i}:v]scale=${W * 1.3}:${H * 1.3}:force_original_aspect_ratio=increase,` +
+            `crop=${W * 1.3}:${H * 1.3},` +
+            `zoompan=z='min(1.0+on*${zoomIncrement},${zoomFactor})':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${W}x${H}:fps=${fps},` +
+            `format=yuv420p,setpts=PTS-STARTPTS[v${i}]`
+          );
+        } else {
+          // ZOOM OUT: Start at zoomFactor, end at 1.0
+          const zoomDecrement = (zoomFactor - 1.0) / totalFrames;
+          return (
+            `[${i}:v]scale=${W * 1.3}:${H * 1.3}:force_original_aspect_ratio=increase,` +
+            `crop=${W * 1.3}:${H * 1.3},` +
+            `zoompan=z='max(${zoomFactor}-on*${zoomDecrement},1.0)':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${W}x${H}:fps=${fps},` +
+            `format=yuv420p,setpts=PTS-STARTPTS[v${i}]`
+          );
+        }
       })
       .join(";");
 
