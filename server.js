@@ -34,8 +34,8 @@ function pickAmbience(theme = "") {
   return "lullaby.wav";
 }
 
-/* ------------------ OVERLAY ------------------ */
-function pickOverlay(format) {
+/* ------------------ OVERLAY (THEME-BASED) ------------------ */
+function pickOverlay(format, theme = "") {
   const base = path.join(__dirname, "overlays");
   const dir = format === "9:16" ? path.join(base, "9x16") : path.join(base, "16x9");
 
@@ -44,9 +44,31 @@ function pickOverlay(format) {
     return null;
   }
 
-  const files = fs.readdirSync(dir).filter((f) => f.endsWith(".mp4"));
-  console.log("🎞 Overlay files:", files);
+  // Theme-based overlay mapping
+  const t = String(theme).toLowerCase();
+  let overlayName = "bokeh_ready.mp4"; // Default fallback
 
+  if (t.includes("ocean") || t.includes("water") || t.includes("beach") || t.includes("sea")) {
+    overlayName = "blue-pink-powder_ready.mp4";
+  } else if (t.includes("space") || t.includes("stars") || t.includes("galaxy") || t.includes("cosmic")) {
+    overlayName = "lights_ready.mp4";
+  } else if (t.includes("forest") || t.includes("nature") || t.includes("garden") || t.includes("jungle")) {
+    overlayName = "bokeh_ready.mp4";
+  } else if (t.includes("magic") || t.includes("fairy") || t.includes("fantasy") || t.includes("wizard")) {
+    overlayName = "dust_ready.mp4";
+  }
+
+  const overlayPath = path.join(dir, overlayName);
+
+  // Verify file exists, fallback to any available overlay if not
+  if (fs.existsSync(overlayPath)) {
+    console.log("🎞 Using theme overlay:", overlayName);
+    return overlayPath;
+  }
+
+  // Fallback: grab first available overlay
+  console.log("⚠️ Requested overlay not found, using fallback");
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith(".mp4"));
   return files.length ? path.join(dir, files[0]) : null;
 }
 
@@ -179,7 +201,7 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     }
 
     /* ---------- OVERLAY ---------- */
-    const overlayPath = pickOverlay(format);
+    const overlayPath = pickOverlay(format, theme);
 
     /* ---------- DURATIONS ---------- */
     const audioDur = ffprobeDuration(`${dir}/voice.wav`);
