@@ -206,16 +206,30 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     const ambIdx = voiceIdx + 1;
     const overlayIdx = ambIdx + 1;
 
-    /* ---------- FILTER GRAPH ---------- */
+    /* ---------- FILTER GRAPH (WITH KEN BURNS) ---------- */
+    // Ken Burns settings
+    const zoomDuration = perImage; // Each scene's duration
+    const zoomFactor = 1.15; // 1.15 = 15% zoom (subtle), 1.3 = 30% (dramatic)
+
+    // Process each image with Ken Burns zoom
     let filter = images
-      .map(
-        (_, i) =>
-          `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,` +
-          `crop=${W}:${H},fps=${fps},format=yuv420p,` +
-          `setpts=PTS-STARTPTS[v${i}]`
-      )
+      .map((_, i) => {
+        // Alternate between zoom in and zoom out for variety
+        const zoomIn = i % 2 === 0;
+        const startScale = zoomIn ? 1.0 : zoomFactor;
+        const endScale = zoomIn ? zoomFactor : 1.0;
+
+        return (
+          `[${i}:v]scale=${W * 1.2}:${H * 1.2}:force_original_aspect_ratio=increase,` +
+          `crop=${W * 1.2}:${H * 1.2}:(iw-ow)/2:(ih-oh)/2,` + // Center crop with padding
+          `zoompan=z='if(lte(zoom,1.0),${startScale},zoom+${(endScale - startScale) / (zoomDuration * fps)})':` +
+          `d=${zoomDuration * fps}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':fps=${fps}:s=${W}x${H},` +
+          `format=yuv420p,setpts=PTS-STARTPTS[v${i}]`
+        );
+      })
       .join(";");
 
+    // Concatenate all zoomed scenes
     filter +=
       ";" +
       images.map((_, i) => `[v${i}]`).join("") +
