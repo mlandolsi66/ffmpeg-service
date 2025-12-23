@@ -46,23 +46,37 @@ function pickOverlay(format, theme = "") {
 
   // Theme-based overlay mapping
   const t = String(theme).toLowerCase();
-  let overlayName = "bokeh_ready.mp4"; // Default fallback
+  let overlayName;
 
-  if (t.includes("ocean") || t.includes("water") || t.includes("beach") || t.includes("sea")) {
-    overlayName = "blue-pink-powder_ready.mp4";
-  } else if (t.includes("space") || t.includes("stars") || t.includes("galaxy") || t.includes("cosmic")) {
-    overlayName = "lights_ready.mp4";
-  } else if (t.includes("forest") || t.includes("nature") || t.includes("garden") || t.includes("jungle")) {
-    overlayName = "bokeh_ready.mp4";
-  } else if (t.includes("magic") || t.includes("fairy") || t.includes("fantasy") || t.includes("wizard")) {
-    overlayName = "dust_ready.mp4";
+  if (format === "9:16") {
+    // Portrait overlays
+    if (t.includes("ocean") || t.includes("water") || t.includes("beach") || t.includes("sea")) {
+      overlayName = "blue-pink-powder_ready.mp4";
+    } else if (t.includes("space") || t.includes("stars") || t.includes("galaxy") || t.includes("cosmic")) {
+      overlayName = "lights_ready.mp4";
+    } else if (t.includes("magic") || t.includes("fairy") || t.includes("fantasy") || t.includes("wizard")) {
+      overlayName = "dust.mp4";
+    } else {
+      overlayName = "bokeh_ready.mp4"; // Default for 9:16
+    }
+  } else {
+    // Landscape overlays (16:9)
+    if (t.includes("ocean") || t.includes("water") || t.includes("beach") || t.includes("sea")) {
+      overlayName = "sparkles.mp4";
+    } else if (t.includes("space") || t.includes("stars") || t.includes("galaxy") || t.includes("cosmic")) {
+      overlayName = "light.mp4";
+    } else if (t.includes("magic") || t.includes("fairy") || t.includes("fantasy") || t.includes("wizard")) {
+      overlayName = "magic.mp4";
+    } else {
+      overlayName = "dust_bokeh.mp4"; // Default for 16:9
+    }
   }
 
   const overlayPath = path.join(dir, overlayName);
 
   // Verify file exists, fallback to any available overlay if not
   if (fs.existsSync(overlayPath)) {
-    console.log("🎞 Using theme overlay:", overlayName);
+    console.log(`🎞 Using ${format} overlay:`, overlayName, "for theme:", theme || "default");
     return overlayPath;
   }
 
