@@ -199,6 +199,23 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
 
     for (let i = 0; i < images.length; i++) {
       await download(images[i], `${dir}/img${i}.jpg`);
+      
+      // ✅ VALIDATE: Check downloaded file
+      const imgPath = `${dir}/img${i}.jpg`;
+      if (!fs.existsSync(imgPath)) {
+        throw new Error(`Image ${i} failed to download: ${images[i]}`);
+      }
+      
+      const imgStats = fs.statSync(imgPath);
+      console.log(`✅ img${i}.jpg downloaded: ${imgStats.size} bytes`);
+      
+      // ✅ VALIDATE: Check image dimensions with ffprobe
+      try {
+        const probe = execSync(`ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "${imgPath}"`).toString().trim();
+        console.log(`📐 img${i}.jpg dimensions: ${probe}`);
+      } catch (probeError) {
+        console.error(`⚠️ Could not probe img${i}.jpg:`, probeError.message);
+      }
     }
     await download(audioUrl, `${dir}/voice.wav`);
 
