@@ -316,32 +316,16 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     const totalFrames = Math.floor(perImage * fps);
     const fadeDuration = 0.5;
 
+    // SIMPLIFIED: No zoom/pan - just scale + fade
     let filter = images.map((_, i) => {
-      const zoomIn = i % 2 === 0;
-      
-      if (zoomIn) {
-        return (
-          `[${i}:v]scale=${W * 1.5}:${H * 1.5}:force_original_aspect_ratio=increase,` +
-          `crop=${W * 1.5}:${H * 1.5},` +
-          `zoompan=z='min(1.0+on/${totalFrames}*${zoomFactor - 1.0},${zoomFactor})':` +
-          `x='iw/2-(iw/zoom/2)-((1-on/${totalFrames})*iw*0.1)':y='ih/2-(ih/zoom/2)':` +
-          `d=${totalFrames}:s=${W}x${H}:fps=${fps},trim=duration=${perImage},format=yuv420p,setpts=PTS-STARTPTS` +
-          (i === 0 ? `,fade=t=in:st=0:d=${fadeDuration}[v${i}]` :
-           i === images.length - 1 ? `,fade=t=out:st=${perImage - fadeDuration}:d=${fadeDuration}[v${i}]` :
-           `,fade=t=in:st=0:d=${fadeDuration},fade=t=out:st=${perImage - fadeDuration}:d=${fadeDuration}[v${i}]`)
-        );
-      } else {
-        return (
-          `[${i}:v]scale=${W * 1.5}:${H * 1.5}:force_original_aspect_ratio=increase,` +
-          `crop=${W * 1.5}:${H * 1.5},` +
-          `zoompan=z='max(${zoomFactor}-on/${totalFrames}*${zoomFactor - 1.0},1.0)':` +
-          `x='iw/2-(iw/zoom/2)+(on/${totalFrames}*iw*0.1)':y='ih/2-(ih/zoom/2)':` +
-          `d=${totalFrames}:s=${W}x${H}:fps=${fps},trim=duration=${perImage},format=yuv420p,setpts=PTS-STARTPTS` +
-          (i === 0 ? `,fade=t=in:st=0:d=${fadeDuration}[v${i}]` :
-           i === images.length - 1 ? `,fade=t=out:st=${perImage - fadeDuration}:d=${fadeDuration}[v${i}]` :
-           `,fade=t=in:st=0:d=${fadeDuration},fade=t=out:st=${perImage - fadeDuration}:d=${fadeDuration}[v${i}]`)
-        );
-      }
+      return (
+        `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,` +
+        `crop=${W}:${H},` +
+        `fps=${fps},format=yuv420p,setpts=PTS-STARTPTS` +
+        (i === 0 ? `,fade=t=in:st=0:d=${fadeDuration}[v${i}]` :
+         i === images.length - 1 ? `,fade=t=out:st=${perImage - fadeDuration}:d=${fadeDuration}[v${i}]` :
+         `,fade=t=in:st=0:d=${fadeDuration},fade=t=out:st=${perImage - fadeDuration}:d=${fadeDuration}[v${i}]`)
+      );
     }).join(";");
 
     const endCardIdx = images.length;
@@ -415,7 +399,50 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
   }
 }
 
-/* ------------------ ENDPOINT ------------------ */
+/* ------------------ RENDER QUEUE ------------------ */
+let renderQueue = [];
+let isRendering = false;
+
+async function processQueue() {
+  if (isRendering || renderQueue.length === 0) return;
+  
+  isRendering = true;
+  const { videoId, images, audioUrl, format, theme, res } = renderQueue.shift();
+  
+  console.log(`🎬 Processing video ${videoId} (${renderQueue.length} in queue)`);
+  
+  try {
+    const publicUrl = await renderVideo(videoId, images, audioUrl, format, theme);
+    
+    if (res && !res.headersSent) {
+      res.status(200).json({
+        success: true,
+        message: "render complete",
+        videoId,
+        url: publicUrl
+      });
+    }
+  } catch (error) {
+    console.error("🔥 Queue processing failed:", error);
+    
+    if (res && !res.headersSent) {
+      res.status(500).json({
+        error: "render failed",
+        details: String(error.message || error)
+      });
+    }
+  } finally {
+    isRendering = false;
+    
+    // Process next item
+    if (renderQueue.length > 0) {
+      console.log(`📋 ${renderQueue.length} videos remaining in queue`);
+      setTimeout(processQueue, 1000); // Small delay between videos
+    }
+  }
+}
+
+/* ------------------ ENDPOINT (UPDATED) ------------------ */
 app.post("/render", async (req, res) => {
   try {
     const { videoId, images, audioUrl, format = "9:16", theme = "" } = req.body;
@@ -429,20 +456,28 @@ app.post("/render", async (req, res) => {
 
     await updateVideoStatus(videoId, "rendering");
 
+    // ✅ ADD TO QUEUE instead of immediate processing
+    renderQueue.push({ videoId, images, audioUrl, format, theme, res: null });
+    
+    const queuePosition = renderQueue.length;
+    console.log(`📋 Added to queue at position ${queuePosition}`);
+
+    // Return 202 immediately
     res.status(202).json({
       success: true,
-      message: "Rendering started",
+      message: queuePosition === 1 ? "render starting" : `queued at position ${queuePosition}`,
       videoId,
+      queuePosition
     });
 
-    renderVideo(videoId, images, audioUrl, format, theme).catch((e) => {
-      console.error("🔥 Background render failed:", e);
-    });
+    // Start processing queue
+    processQueue();
+
   } catch (e) {
     console.error("🔥 /render endpoint failed:", e);
     res.status(500).json({
       error: "render failed",
-      details: String(e.message || e),
+      details: String(e.message || e)
     });
   }
 });
