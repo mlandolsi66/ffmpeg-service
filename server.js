@@ -61,10 +61,12 @@ function pickOverlay(format, theme = "") {
     return null;
   }
 
+  // Theme-based overlay mapping
   const t = String(theme).toLowerCase();
   let overlayName;
 
   if (format === "9:16") {
+    // Portrait overlays
     if (t.includes("ocean") || t.includes("water") || t.includes("beach") || t.includes("sea")) {
       overlayName = "blue-pink-powder_ready.mp4";
     } else if (t.includes("space") || t.includes("stars") || t.includes("galaxy") || t.includes("cosmic")) {
@@ -72,9 +74,10 @@ function pickOverlay(format, theme = "") {
     } else if (t.includes("magic") || t.includes("fairy") || t.includes("fantasy") || t.includes("wizard")) {
       overlayName = "dust.mp4";
     } else {
-      overlayName = "bokeh_ready.mp4";
+      overlayName = "bokeh_ready.mp4"; // Default for 9:16
     }
   } else {
+    // Landscape overlays (16:9)
     if (t.includes("ocean") || t.includes("water") || t.includes("beach") || t.includes("sea")) {
       overlayName = "sparkles.mp4";
     } else if (t.includes("space") || t.includes("stars") || t.includes("galaxy") || t.includes("cosmic")) {
@@ -82,16 +85,19 @@ function pickOverlay(format, theme = "") {
     } else if (t.includes("magic") || t.includes("fairy") || t.includes("fantasy") || t.includes("wizard")) {
       overlayName = "magic.mp4";
     } else {
-      overlayName = "dust_bokeh.mp4";
+      overlayName = "dust_bokeh.mp4"; // Default for 16:9
     }
   }
 
   const overlayPath = path.join(dir, overlayName);
+
+  // Verify file exists, fallback to any available overlay if not
   if (fs.existsSync(overlayPath)) {
     console.log(`🎞 Using ${format} overlay:`, overlayName, "for theme:", theme || "default");
     return overlayPath;
   }
 
+  // Fallback: grab first available overlay
   console.log("⚠️ Requested overlay not found, using fallback");
   const files = fs.readdirSync(dir).filter((f) => f.endsWith(".mp4"));
   return files.length ? path.join(dir, files[0]) : null;
@@ -100,7 +106,11 @@ function pickOverlay(format, theme = "") {
 /* ------------------ HELPERS ------------------ */
 function ffprobeDuration(file) {
   const d = parseFloat(
-    execSync(`ffprobe -v error -show_entries format=duration -of csv=p=0 "${file}"`).toString().trim()
+    execSync(
+      `ffprobe -v error -show_entries format=duration -of csv=p=0 "${file}"`
+    )
+      .toString()
+      .trim()
   );
   if (!Number.isFinite(d) || d <= 0) {
     throw new Error(`Invalid duration: ${file}`);
@@ -108,52 +118,11 @@ function ffprobeDuration(file) {
   return d;
 }
 
-async function download(url, dest, retries = 3) {
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      console.log(`⬇️ Downloading (attempt ${attempt}/${retries}):`, url);
-      
-      const r = await fetch(url, {
-        timeout: 30000, // 30 second timeout
-        headers: {
-          'User-Agent': 'Mozilla/5.0'
-        }
-      });
-      
-      if (!r.ok) {
-        throw new Error(`HTTP ${r.status}: ${r.statusText}`);
-      }
-      
-      const arrayBuffer = await r.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-      
-      console.log(`✅ Downloaded ${buffer.length} bytes`);
-      
-      fs.writeFileSync(dest, buffer);
-      
-      // Verify file was written
-      if (!fs.existsSync(dest)) {
-        throw new Error(`File not written to ${dest}`);
-      }
-      
-      const stats = fs.statSync(dest);
-      console.log(`✅ Saved to ${dest} (${stats.size} bytes)`);
-      
-      return; // Success!
-      
-    } catch (error) {
-      console.error(`❌ Download attempt ${attempt} failed:`, error.message);
-      
-      if (attempt === retries) {
-        throw new Error(`Download failed after ${retries} attempts: ${error.message}`);
-      }
-      
-      // Wait before retry (exponential backoff)
-      const waitTime = attempt * 2000;
-      console.log(`⏳ Waiting ${waitTime}ms before retry...`);
-      await new Promise(resolve => setTimeout(resolve, waitTime));
-    }
-  }
+async function download(url, dest) {
+  console.log("⬇️ Downloading:", url);
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`Download failed: ${url}`);
+  fs.writeFileSync(dest, Buffer.from(await r.arrayBuffer()));
 }
 
 function run(cmd) {
@@ -192,6 +161,7 @@ async function uploadToSupabase(videoId, buffer) {
 
   const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/videos/${path}`;
   console.log("✅ Uploaded:", publicUrl);
+
   return publicUrl;
 }
 
@@ -203,6 +173,7 @@ async function updateVideoStatus(videoId, status, videoUrl = null) {
   }
 
   const updateUrl = `${SUPABASE_URL}/rest/v1/videos?id=eq.${videoId}`;
+
   const payload = { status };
   if (videoUrl) {
     payload.video_url = videoUrl;
@@ -238,167 +209,180 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
   try {
     fs.mkdirSync(dir, { recursive: true });
 
-    // ✅ VALIDATE: Check all image URLs first
-    console.log("🔍 Validating image URLs...");
-    for (let i = 0; i < images.length; i++) {
-      if (!images[i] || typeof images[i] !== 'string') {
-        throw new Error(`Image ${i} is invalid: ${images[i]}`);
-      }
-      
-      if (!images[i].startsWith('http')) {
-        throw new Error(`Image ${i} is not a URL: ${images[i]}`);
-      }
-      
-      console.log(`✅ Image ${i} URL valid:`, images[i].substring(0, 60) + '...');
-    }
-
-    // Download all images
+    /* ---------- DOWNLOAD ---------- */
     for (let i = 0; i < images.length; i++) {
       await download(images[i], `${dir}/img${i}.jpg`);
-      
-      // ✅ VALIDATE: Check downloaded file
-      const imgPath = `${dir}/img${i}.jpg`;
-      if (!fs.existsSync(imgPath)) {
-        throw new Error(`Image ${i} failed to download: ${images[i]}`);
-      }
-      
-      const imgStats = fs.statSync(imgPath);
-      console.log(`✅ img${i}.jpg saved: ${imgStats.size} bytes`);
-      
-      // ✅ VALIDATE: Check image dimensions with ffprobe
-      try {
-        const probe = execSync(`ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "${imgPath}"`).toString().trim();
-        console.log(`📐 img${i}.jpg dimensions: ${probe}`);
-      } catch (probeError) {
-        console.error(`⚠️ Could not probe img${i}.jpg:`, probeError.message);
-      }
     }
     await download(audioUrl, `${dir}/voice.wav`);
 
+    /* ---------- AMBIENCE ---------- */
     const ambFile = pickAmbience(theme);
     const ambPath = path.join(__dirname, "ambience", ambFile);
 
     console.log("🎧 Ambience file:", ambPath);
 
     if (!fs.existsSync(ambPath)) {
-      console.error("❌ Ambience missing:", ambPath);
+      console.error(
+        "❌ Ambience dir contents:",
+        fs.existsSync(path.join(__dirname, "ambience"))
+          ? fs.readdirSync(path.join(__dirname, "ambience"))
+          : "MISSING DIR"
+      );
       throw new Error(`Ambience missing: ${ambPath}`);
     }
 
+    /* ---------- OVERLAY ---------- */
     const overlayPath = pickOverlay(format, theme);
-    const endCardPath = getEndCard(format);
-    const endCardDuration = 2.5;
 
+    /* ---------- END CARD ---------- */
+    const endCardPath = getEndCard(format);
+    const endCardDuration = 2.5; // 2.5 seconds end card
+
+    /* ---------- DURATIONS ---------- */
     const audioDur = ffprobeDuration(`${dir}/voice.wav`);
     console.log("⏱ Narration duration:", audioDur);
 
     const storyDuration = endCardPath ? audioDur - endCardDuration : audioDur;
-    const perImage = Math.max(storyDuration / images.length, 3);
+    const numStoryImages = images.length;
+    const perImage = Math.max(storyDuration / numStoryImages, 3);
     
     const fps = 25;
     const [W, H] = format === "9:16" ? [1080, 1920] : [1920, 1080];
 
-    let cmdInputs = images.map((_, i) => `-loop 1 -framerate ${fps} -t ${perImage} -i "${dir}/img${i}.jpg"`).join(" ");
+    /* ---------- INPUTS (LOCKED ORDER) ---------- */
+    let cmdInputs = images
+      .map(
+        (_, i) =>
+          `-loop 1 -framerate ${fps} -t ${perImage} -i "${dir}/img${i}.jpg"`
+      )
+      .join(" ");
 
+    // Add end card if available
     if (endCardPath) {
       cmdInputs += ` -loop 1 -framerate ${fps} -t ${endCardDuration} -i "${endCardPath}"`;
     }
 
     cmdInputs += ` -i "${dir}/voice.wav"`;
     cmdInputs += ` -i "${ambPath}"`;
+
     if (overlayPath) cmdInputs += ` -stream_loop -1 -i "${overlayPath}"`;
 
     const voiceIdx = images.length + (endCardPath ? 1 : 0);
     const ambIdx = voiceIdx + 1;
     const overlayIdx = ambIdx + 1;
 
-    const zoomFactor = 1.2;
-    const totalFrames = Math.floor(perImage * fps);
-    const fadeDuration = 0.5;
+    /* ---------- FILTER GRAPH (WITH KEN BURNS + FADE TRANSITIONS) ---------- */
+    const zoomFactor = 1.15; // 15% zoom (1.15), or 1.2 for more dramatic
+    const totalFrames = Math.floor(perImage * fps); // Convert seconds to frames
+    const fadeDuration = 0.5; // 0.5 second fade at start/end of each scene
 
-    // LIGHTWEIGHT ZOOM: Simpler calculation, less memory
-    let filter = images.map((_, i) => {
-      const zoomIn = i % 2 === 0;
-      
-      // Simpler zoom without complex pan calculations
-      const zoomFilter = zoomIn 
-        ? `zoompan=z='1+0.2*on/${totalFrames}':d=${totalFrames}:s=${W}x${H}:fps=${fps}`
-        : `zoompan=z='1.2-0.2*on/${totalFrames}':d=${totalFrames}:s=${W}x${H}:fps=${fps}`;
-      
-      return (
-        `[${i}:v]scale=${W * 1.2}:${H * 1.2}:force_original_aspect_ratio=increase,` +
-        `crop=${W * 1.2}:${H * 1.2},` +
-        `${zoomFilter},` +
-        `format=yuv420p,setpts=PTS-STARTPTS` +
-        (i === 0 ? `,fade=t=in:st=0:d=${fadeDuration}[v${i}]` :
-         i === images.length - 1 ? `,fade=t=out:st=${perImage - fadeDuration}:d=${fadeDuration}[v${i}]` :
-         `,fade=t=in:st=0:d=${fadeDuration},fade=t=out:st=${perImage - fadeDuration}:d=${fadeDuration}[v${i}]`)
-      );
-    }).join(";");
+    // Process each image with Ken Burns zoom + fade in/out
+    let filter = images
+      .map((_, i) => {
+        // Alternate zoom direction for variety
+        const zoomIn = i % 2 === 0;
+        
+        const baseFilter = zoomIn
+          ? `[${i}:v]scale=${W * 1.3}:${H * 1.3}:force_original_aspect_ratio=increase,` +
+            `crop=${W * 1.3}:${H * 1.3},` +
+            `zoompan=z='min(1.0+on*${(zoomFactor - 1.0) / totalFrames},${zoomFactor})':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${W}x${H}:fps=${fps},` +
+            `trim=duration=${perImage},format=yuv420p,setpts=PTS-STARTPTS`
+          : `[${i}:v]scale=${W * 1.3}:${H * 1.3}:force_original_aspect_ratio=increase,` +
+            `crop=${W * 1.3}:${H * 1.3},` +
+            `zoompan=z='max(${zoomFactor}-on*${(zoomFactor - 1.0) / totalFrames},1.0)':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${W}x${H}:fps=${fps},` +
+            `trim=duration=${perImage},format=yuv420p,setpts=PTS-STARTPTS`;
+        
+        // Add fade in on first scene, fade out on last scene, both on middle scenes
+        if (i === 0) {
+          // First scene: fade in only
+          return baseFilter + `,fade=t=in:st=0:d=${fadeDuration}[v${i}]`;
+        } else if (i === images.length - 1) {
+          // Last scene: fade out only
+          return baseFilter + `,fade=t=out:st=${perImage - fadeDuration}:d=${fadeDuration}[v${i}]`;
+        } else {
+          // Middle scenes: fade in and fade out
+          return baseFilter + `,fade=t=in:st=0:d=${fadeDuration},fade=t=out:st=${perImage - fadeDuration}:d=${fadeDuration}[v${i}]`;
+        }
+      })
+      .join(";");
 
+    // Concatenate all scenes
     const endCardIdx = images.length;
 
     if (endCardPath) {
+      // Process end card (no zoom, with fade in)
       filter += `;[${endCardIdx}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=${fps},format=yuv420p,setpts=PTS-STARTPTS,fade=t=in:st=0:d=${fadeDuration}[vendcard]`;
-      filter += ";" + images.map((_, i) => `[v${i}]`).join("") + `[vendcard]concat=n=${images.length + 1}:v=1:a=0[vconcat];[vconcat]trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
+      
+      // Concat all scenes + end card
+      filter +=
+        ";" +
+        images.map((_, i) => `[v${i}]`).join("") +
+        `[vendcard]concat=n=${images.length + 1}:v=1:a=0[vconcat];` +
+        `[vconcat]trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
     } else {
-      filter += ";" + images.map((_, i) => `[v${i}]`).join("") + `concat=n=${images.length}:v=1:a=0[vconcat];[vconcat]trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
+      // Concat story scenes only
+      filter +=
+        ";" +
+        images.map((_, i) => `[v${i}]`).join("") +
+        `concat=n=${images.length}:v=1:a=0[vconcat];` +
+        `[vconcat]trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
     }
 
     if (overlayPath) {
-      filter += `;[${overlayIdx}:v]scale=${W}:${H},fps=${fps},format=rgba,colorchannelmixer=aa=0.25,setpts=PTS-STARTPTS[ov];[base][ov]overlay=shortest=1:format=auto[v]`;
+      filter +=
+        `;[${overlayIdx}:v]scale=${W}:${H},fps=${fps},format=rgba,` +
+        `colorchannelmixer=aa=0.25,setpts=PTS-STARTPTS[ov]` +
+        `;[base][ov]overlay=shortest=1:format=auto[v]`;
     } else {
       filter += `;[base]copy[v]`;
     }
 
-    filter += `;[${voiceIdx}:a]aformat=fltp:48000:stereo,asetpts=PTS-STARTPTS[vox];[${ambIdx}:a]aformat=fltp:48000:stereo,aloop=loop=-1:size=2e+09,volume=0.18,apad,atrim=0:${audioDur},asetpts=PTS-STARTPTS[amb];[vox][amb]amix=inputs=2:duration=first:dropout_transition=0[a]`;
+    filter +=
+      `;[${voiceIdx}:a]aformat=fltp:48000:stereo,asetpts=PTS-STARTPTS[vox]` +
+      `;[${ambIdx}:a]aformat=fltp:48000:stereo,` +
+      `aloop=loop=-1:size=2e+09,volume=0.18,apad,` +
+      `atrim=0:${audioDur},asetpts=PTS-STARTPTS[amb]` +
+      `;[vox][amb]amix=inputs=2:duration=first:dropout_transition=0[a]`;
 
+    /* ---------- EXEC ---------- */
     const out = `${dir}/out.mp4`;
 
-    const ffmpeg = `ffmpeg -y -loglevel error ${cmdInputs} -filter_complex "${filter}" -map "[v]" -map "[a]" -t ${audioDur} -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 160k "${out}"`;
+    const ffmpeg =
+      `ffmpeg -y ${cmdInputs} ` +
+      `-filter_complex "${filter}" ` +
+      `-map "[v]" -map "[a]" ` +
+      `-t ${audioDur} ` +
+      `-c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -movflags +faststart ` +
+      `-c:a aac -b:a 160k "${out}"`;
 
-    console.log("🧠 FFmpeg command:\n", ffmpeg.substring(0, 500), "...");
+    console.log("🧠 FFmpeg command:\n", ffmpeg);
 
-    console.log("🧠 Running FFmpeg...");
-    console.log("📊 Command length:", ffmpeg.length, "chars");
+    await run(ffmpeg);
 
-    try {
-      await run(ffmpeg);
-      console.log("✅ FFmpeg completed successfully");
-    } catch (ffmpegError) {
-      console.error("🔥 FFmpeg execution failed!");
-      console.error("❌ Error message:", ffmpegError.message);
-      console.error("❌ Error details:", String(ffmpegError).substring(0, 1000));
-      throw ffmpegError;
-    }
-
-    console.log("📂 Checking if out.mp4 exists...");
-    if (!fs.existsSync(out)) {
-      throw new Error(`FFmpeg completed but ${out} was not created!`);
-    }
-
-    const stats = fs.statSync(out);
-    console.log(`✅ Video file created: ${stats.size} bytes`);
-
+    /* ---------- UPLOAD TO SUPABASE ---------- */
     const buffer = fs.readFileSync(out);
     const publicUrl = await uploadToSupabase(videoId, buffer);
 
+    /* ---------- UPDATE DB ---------- */
     await updateVideoStatus(videoId, "done", publicUrl);
 
     console.log("✅ Render complete:", publicUrl);
 
+    /* ---------- CLEANUP ---------- */
     fs.rmSync(dir, { recursive: true, force: true });
 
     return publicUrl;
   } catch (e) {
     console.error("🔥 Render failed:", e);
 
+    // Update DB to failed status
     try {
       await updateVideoStatus(videoId, "failed");
     } catch (dbErr) {
       console.error("❌ Could not update DB to failed:", dbErr);
     }
 
+    // Cleanup on failure
     if (fs.existsSync(dir)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -407,50 +391,7 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
   }
 }
 
-/* ------------------ RENDER QUEUE ------------------ */
-let renderQueue = [];
-let isRendering = false;
-
-async function processQueue() {
-  if (isRendering || renderQueue.length === 0) return;
-  
-  isRendering = true;
-  const { videoId, images, audioUrl, format, theme, res } = renderQueue.shift();
-  
-  console.log(`🎬 Processing video ${videoId} (${renderQueue.length} in queue)`);
-  
-  try {
-    const publicUrl = await renderVideo(videoId, images, audioUrl, format, theme);
-    
-    if (res && !res.headersSent) {
-      res.status(200).json({
-        success: true,
-        message: "render complete",
-        videoId,
-        url: publicUrl
-      });
-    }
-  } catch (error) {
-    console.error("🔥 Queue processing failed:", error);
-    
-    if (res && !res.headersSent) {
-      res.status(500).json({
-        error: "render failed",
-        details: String(error.message || error)
-      });
-    }
-  } finally {
-    isRendering = false;
-    
-    // Process next item
-    if (renderQueue.length > 0) {
-      console.log(`📋 ${renderQueue.length} videos remaining in queue`);
-      setTimeout(processQueue, 1000); // Small delay between videos
-    }
-  }
-}
-
-/* ------------------ ENDPOINT (UPDATED) ------------------ */
+/* ------------------ ENDPOINT ------------------ */
 app.post("/render", async (req, res) => {
   try {
     const { videoId, images, audioUrl, format = "9:16", theme = "" } = req.body;
@@ -462,30 +403,25 @@ app.post("/render", async (req, res) => {
       return res.status(400).json({ error: "Missing inputs" });
     }
 
+    // Update status to rendering
     await updateVideoStatus(videoId, "rendering");
 
-    // ✅ ADD TO QUEUE instead of immediate processing
-    renderQueue.push({ videoId, images, audioUrl, format, theme, res: null });
-    
-    const queuePosition = renderQueue.length;
-    console.log(`📋 Added to queue at position ${queuePosition}`);
-
-    // Return 202 immediately
+    // Return immediately - render happens async
     res.status(202).json({
       success: true,
-      message: queuePosition === 1 ? "render starting" : `queued at position ${queuePosition}`,
+      message: "Rendering started",
       videoId,
-      queuePosition
     });
 
-    // Start processing queue
-    processQueue();
-
+    // Start render in background
+    renderVideo(videoId, images, audioUrl, format, theme).catch((e) => {
+      console.error("🔥 Background render failed:", e);
+    });
   } catch (e) {
     console.error("🔥 /render endpoint failed:", e);
     res.status(500).json({
       error: "render failed",
-      details: String(e.message || e)
+      details: String(e.message || e),
     });
   }
 });
