@@ -316,12 +316,20 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     const totalFrames = Math.floor(perImage * fps);
     const fadeDuration = 0.5;
 
-    // SIMPLIFIED: No zoom/pan - just scale + fade
+    // LIGHTWEIGHT ZOOM: Simpler calculation, less memory
     let filter = images.map((_, i) => {
+      const zoomIn = i % 2 === 0;
+      
+      // Simpler zoom without complex pan calculations
+      const zoomFilter = zoomIn 
+        ? `zoompan=z='1+0.2*on/${totalFrames}':d=${totalFrames}:s=${W}x${H}:fps=${fps}`
+        : `zoompan=z='1.2-0.2*on/${totalFrames}':d=${totalFrames}:s=${W}x${H}:fps=${fps}`;
+      
       return (
-        `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,` +
-        `crop=${W}:${H},` +
-        `fps=${fps},format=yuv420p,setpts=PTS-STARTPTS` +
+        `[${i}:v]scale=${W * 1.2}:${H * 1.2}:force_original_aspect_ratio=increase,` +
+        `crop=${W * 1.2}:${H * 1.2},` +
+        `${zoomFilter},` +
+        `format=yuv420p,setpts=PTS-STARTPTS` +
         (i === 0 ? `,fade=t=in:st=0:d=${fadeDuration}[v${i}]` :
          i === images.length - 1 ? `,fade=t=out:st=${perImage - fadeDuration}:d=${fadeDuration}[v${i}]` :
          `,fade=t=in:st=0:d=${fadeDuration},fade=t=out:st=${perImage - fadeDuration}:d=${fadeDuration}[v${i}]`)
