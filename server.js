@@ -290,11 +290,30 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
 
     const out = `${dir}/out.mp4`;
 
-    const ffmpeg = `ffmpeg -y ${cmdInputs} -filter_complex "${filter}" -map "[v]" -map "[a]" -t ${audioDur} -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 160k "${out}"`;
+    const ffmpeg = `ffmpeg -y -loglevel error ${cmdInputs} -filter_complex "${filter}" -map "[v]" -map "[a]" -t ${audioDur} -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 160k "${out}"`;
 
-    console.log("🧠 FFmpeg command:\n", ffmpeg);
+    console.log("🧠 FFmpeg command:\n", ffmpeg.substring(0, 500), "...");
 
-    await run(ffmpeg);
+    console.log("🧠 Running FFmpeg...");
+    console.log("📊 Command length:", ffmpeg.length, "chars");
+
+    try {
+      await run(ffmpeg);
+      console.log("✅ FFmpeg completed successfully");
+    } catch (ffmpegError) {
+      console.error("🔥 FFmpeg execution failed!");
+      console.error("❌ Error message:", ffmpegError.message);
+      console.error("❌ Error details:", String(ffmpegError).substring(0, 1000));
+      throw ffmpegError;
+    }
+
+    console.log("📂 Checking if out.mp4 exists...");
+    if (!fs.existsSync(out)) {
+      throw new Error(`FFmpeg completed but ${out} was not created!`);
+    }
+
+    const stats = fs.statSync(out);
+    console.log(`✅ Video file created: ${stats.size} bytes`);
 
     const buffer = fs.readFileSync(out);
     const publicUrl = await uploadToSupabase(videoId, buffer);
