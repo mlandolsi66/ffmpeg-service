@@ -5,7 +5,6 @@
 # ✅ Verifies all assets exist
 # ✅ Fails build if assets missing
 # ============================================
-
 FROM node:18-slim
 
 # ---------- Install FFmpeg ----------
@@ -56,10 +55,20 @@ RUN mkdir -p overlays/9x16 overlays/16x9 && \
       done; \
     else \
       echo "⚠️  No raw 16:9 overlays found"; \
+    fi && \
+    echo "🔧 Adding ocean overlays to normalized directories..." && \
+    # Copy blue-pink-powder to ocean_1 for 9:16
+    if [ -f "overlays/9x16/blue-pink-powder_ready.mp4" ]; then \
+      cp "overlays/9x16/blue-pink-powder_ready.mp4" "overlays/9x16/ocean_1.mp4" && \
+      echo "  → Added ocean_1.mp4 (9:16)"; \
+    fi && \
+    # Copy sparkles to ocean_1 for 16:9
+    if [ -f "overlays/16x9/sparkles.mp4" ]; then \
+      cp "overlays/16x9/sparkles.mp4" "overlays/16x9/ocean_1.mp4" && \
+      echo "  → Added ocean_1.mp4 (16:9)"; \
     fi
 
 # ---------- Verify CRITICAL assets exist ----------
-# This FAILS the build if assets are missing
 RUN echo "🔍 Verifying assets..." && \
     test -d overlays/9x16 || (echo "❌ overlays/9x16 missing" && exit 1) && \
     test -d overlays/16x9 || (echo "❌ overlays/16x9 missing" && exit 1) && \
@@ -80,5 +89,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD node -e "require('http').get('http://localhost:8080/health', (r) => { process.exit(r.statusCode === 200 ? 0 : 1); });"
 
 EXPOSE 8080
-
 CMD ["node", "server.js"]
