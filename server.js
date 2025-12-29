@@ -108,11 +108,52 @@ function ffprobeDuration(file) {
   return d;
 }
 
-async function download(url, dest) {
-  console.log("⬇️ Downloading:", url);
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`Download failed: ${url}`);
-  fs.writeFileSync(dest, Buffer.from(await r.arrayBuffer()));
+async function download(url, dest, retries = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      console.log(`⬇️ Downloading (attempt ${attempt}/${retries}):`, url);
+      
+      const r = await fetch(url, {
+        timeout: 30000, // 30 second timeout
+        headers: {
+          'User-Agent': 'Mozilla/5.0'
+        }
+      });
+      
+      if (!r.ok) {
+        throw new Error(`HTTP ${r.status}: ${r.statusText}`);
+      }
+      
+      const arrayBuffer = await r.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      
+      console.log(`✅ Downloaded ${buffer.length} bytes`);
+      
+      fs.writeFileSync(dest, buffer);
+      
+      // Verify file was written
+      if (!fs.existsSync(dest)) {
+        throw new Error(`File not written to ${dest}`);
+      }
+      
+      const stats = fs.statSync(dest);
+      console.log(`✅ Saved to ${dest} (${stats.size} bytes)`);
+      
+      return; // Success!
+      
+    } catch (error) {
+      console.error(`❌ Download attempt ${attempt} failed:`, error.message);
+      
+      if (attempt === retries) {
+        throw new Error(`Download failed after ${retries} attempts: ${error.message}`);
+      }
+      
+      // Wait before retry (exponential backoff)
+      const waitTime = attempt * 2000;
+      console.log(`⏳ Waiting ${waitTime}ms before retry...`);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
+  }
 }
 
 function run(cmd) {
@@ -197,6 +238,21 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
   try {
     fs.mkdirSync(dir, { recursive: true });
 
+    // ✅ VALIDATE: Check all image URLs first
+    console.log("🔍 Validating image URLs...");
+    for (let i = 0; i < images.length; i++) {
+      if (!images[i] || typeof images[i] !== 'string') {
+        throw new Error(`Image ${i} is invalid: ${images[i]}`);
+      }
+      
+      if (!images[i].startsWith('http')) {
+        throw new Error(`Image ${i} is not a URL: ${images[i]}`);
+      }
+      
+      console.log(`✅ Image ${i} URL valid:`, images[i].substring(0, 60) + '...');
+    }
+
+    // Download all images
     for (let i = 0; i < images.length; i++) {
       await download(images[i], `${dir}/img${i}.jpg`);
       
@@ -207,7 +263,7 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
       }
       
       const imgStats = fs.statSync(imgPath);
-      console.log(`✅ img${i}.jpg downloaded: ${imgStats.size} bytes`);
+      console.log(`✅ img${i}.jpg saved: ${imgStats.size} bytes`);
       
       // ✅ VALIDATE: Check image dimensions with ffprobe
       try {
