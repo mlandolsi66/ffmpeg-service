@@ -276,7 +276,10 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     for (let i = 0; i < images.length; i++) {
       await download(images[i], `${dir}/img${i}.jpg`);
     }
-    await download(audioUrl, `${dir}/voice.wav`);
+    
+    // ✅ FIXED: Download as .mp3 (ElevenLabs returns MP3!)
+    await download(audioUrl, `${dir}/voice.mp3`);
+    console.log("✅ Downloaded audio as voice.mp3");
 
     /* ---------- AMBIENCE ---------- */
     const ambPath = pickAmbience(theme);
@@ -301,7 +304,8 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     const endCardDuration = 2.5;
 
     /* ---------- DURATIONS ---------- */
-    const audioDur = ffprobeDuration(`${dir}/voice.wav`);
+    // ✅ FIXED: Use voice.mp3
+    const audioDur = ffprobeDuration(`${dir}/voice.mp3`);
     console.log("⏱ Narration duration:", audioDur);
 
     const storyDuration = endCardPath ? audioDur - endCardDuration : audioDur;
@@ -323,7 +327,8 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
       cmdInputs += ` -loop 1 -framerate ${fps} -t ${endCardDuration} -i "${endCardPath}"`;
     }
 
-    cmdInputs += ` -i "${dir}/voice.wav"`;
+    // ✅ FIXED: Use voice.mp3
+    cmdInputs += ` -i "${dir}/voice.mp3"`;
     cmdInputs += ` -i "${ambPath}"`;
 
     if (overlayPath) cmdInputs += ` -stream_loop -1 -i "${overlayPath}"`;
