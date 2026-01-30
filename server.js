@@ -356,7 +356,7 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     const ambIdx = voiceIdx + 1;
     const overlayIdx = ambIdx + 1;
 
-    /* ---------- FILTER GRAPH (SIMPLE KEN BURNS - PROVEN) ---------- */
+    /* ---------- FILTER GRAPH (MINIMAL KEN BURNS - SAFE) ---------- */
     const fadeDuration = 0.5;
 
     let filter = images
@@ -367,40 +367,32 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
         // 4 different Ken Burns effects, cycling through
         const effect = i % 4;
         
-        let zoomExpr, xExpr, yExpr;
+        let zoompanParams;
         
         switch (effect) {
           case 0:
-            // SLOW ZOOM IN (center)
-            zoomExpr = `'min(zoom+0.0005,1.15)'`;
-            xExpr = `'iw/2-(iw/zoom/2)'`;
-            yExpr = `'ih/2-(ih/zoom/2)'`;
+            // SLOW ZOOM IN from center
+            zoompanParams = `z='min(zoom+0.0008,1.2)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'`;
             break;
           case 1:
-            // SLOW ZOOM OUT (center)
-            zoomExpr = `'if(eq(on,1),1.15,max(zoom-0.0005,1.0))'`;
-            xExpr = `'iw/2-(iw/zoom/2)'`;
-            yExpr = `'ih/2-(ih/zoom/2)'`;
+            // SLOW ZOOM OUT from center
+            zoompanParams = `z='if(eq(on,1),1.2,max(zoom-0.0008,1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'`;
             break;
           case 2:
-            // PAN LEFT TO RIGHT (slight zoom)
-            zoomExpr = `'min(zoom+0.0002,1.08)'`;
-            xExpr = `'if(eq(on,1),0,min(x+2,iw-iw/zoom))'`;
-            yExpr = `'ih/2-(ih/zoom/2)'`;
+            // ZOOM IN from top-left to center
+            zoompanParams = `z='min(zoom+0.0008,1.2)':x='if(eq(on,1),0,min(x+1,iw/2-iw/zoom/2))':y='if(eq(on,1),0,min(y+1,ih/2-ih/zoom/2))'`;
             break;
           case 3:
-            // PAN RIGHT TO LEFT (slight zoom)
-            zoomExpr = `'min(zoom+0.0002,1.08)'`;
-            xExpr = `'if(eq(on,1),iw/zoom,max(x-2,0))'`;
-            yExpr = `'ih/2-(ih/zoom/2)'`;
+            // ZOOM IN from bottom-right to center  
+            zoompanParams = `z='min(zoom+0.0008,1.2)':x='if(eq(on,1),iw,max(x-1,iw/2-iw/zoom/2))':y='if(eq(on,1),ih,max(y-1,ih/2-ih/zoom/2))'`;
             break;
         }
         
-        // Build filter: scale up -> zoompan -> normalize
+        // Simple filter: scale to fixed size -> zoompan -> output
         const baseFilter = 
-          `[${i}:v]scale=8000:-1,` +
-          `zoompan=z=${zoomExpr}:x=${xExpr}:y=${yExpr}:d=${imgFrames}:s=${W}x${H}:fps=${fps},` +
-          `setsar=1,format=yuv420p,setpts=PTS-STARTPTS`;
+          `[${i}:v]scale=${W*2}:${H*2},setsar=1,` +
+          `zoompan=${zoompanParams}:d=${imgFrames}:s=${W}x${H}:fps=${fps},` +
+          `format=yuv420p,setpts=PTS-STARTPTS`;
         
         // Add fades
         if (i === 0) {
