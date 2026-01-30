@@ -402,9 +402,9 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
             break;
         }
         
-        // Build the full filter for this image
+        // Build the full filter for this image - ADDED setsar=1 to fix SAR mismatch
         const baseFilter = `[${i}:v]scale=${scaleW}:${scaleH}:force_original_aspect_ratio=increase,` +
-          `crop=${scaleW}:${scaleH},${zoompanFilter},format=yuv420p,setpts=PTS-STARTPTS`;
+          `crop=${scaleW}:${scaleH},${zoompanFilter},setsar=1,format=yuv420p,setpts=PTS-STARTPTS`;
         
         // Add fades
         if (i === 0) {
