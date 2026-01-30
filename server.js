@@ -356,24 +356,57 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     const ambIdx = voiceIdx + 1;
     const overlayIdx = ambIdx + 1;
 
-    /* ---------- FILTER GRAPH (FIXED - NO UPSCALING) ---------- */
-    const zoomFactor = 1.08; // Reduced zoom for stability
-    const totalFrames = Math.floor(perImage * fps);
+    /* ---------- FILTER GRAPH (KEN BURNS WITH PAN + ZOOM) ---------- */
     const fadeDuration = 0.5;
+    const totalFrames = Math.floor(perImage * fps);
+    
+    // Scale up images for Ken Burns headroom (1.3x gives room to pan/zoom)
+    const scaleW = Math.round(W * 1.3);
+    const scaleH = Math.round(H * 1.3);
 
     let filter = images
       .map((_, i) => {
-        const zoomIn = i % 2 === 0;
+        // 4 different Ken Burns effects, cycling through
+        const effect = i % 4;
         
-        // FIXED: Scale directly to output size, no 1.3x multiplier
-        const baseFilter = zoomIn
-          ? `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},` +
-            `zoompan=z='min(1.0+on*${(zoomFactor - 1.0) / totalFrames},${zoomFactor})':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${W}x${H}:fps=${fps},` +
-            `format=yuv420p,setpts=PTS-STARTPTS`
-          : `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},` +
-            `zoompan=z='max(${zoomFactor}-on*${(zoomFactor - 1.0) / totalFrames},1.0)':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${W}x${H}:fps=${fps},` +
-            `format=yuv420p,setpts=PTS-STARTPTS`;
+        let zoompanFilter;
         
+        switch (effect) {
+          case 0:
+            // ZOOM IN + PAN RIGHT
+            zoompanFilter = `zoompan=z='1.0+on/${totalFrames}*0.15':` +
+              `x='(iw-iw/zoom)/2 + (on/${totalFrames})*(iw/zoom)*0.1':` +
+              `y='(ih-ih/zoom)/2':` +
+              `d=${totalFrames}:s=${W}x${H}:fps=${fps}`;
+            break;
+          case 1:
+            // ZOOM OUT + PAN LEFT
+            zoompanFilter = `zoompan=z='1.15-on/${totalFrames}*0.15':` +
+              `x='(iw-iw/zoom)/2 - (on/${totalFrames})*(iw/zoom)*0.1':` +
+              `y='(ih-ih/zoom)/2':` +
+              `d=${totalFrames}:s=${W}x${H}:fps=${fps}`;
+            break;
+          case 2:
+            // ZOOM IN + PAN DOWN
+            zoompanFilter = `zoompan=z='1.0+on/${totalFrames}*0.15':` +
+              `x='(iw-iw/zoom)/2':` +
+              `y='(ih-ih/zoom)/2 + (on/${totalFrames})*(ih/zoom)*0.08':` +
+              `d=${totalFrames}:s=${W}x${H}:fps=${fps}`;
+            break;
+          case 3:
+            // ZOOM OUT + PAN UP
+            zoompanFilter = `zoompan=z='1.15-on/${totalFrames}*0.15':` +
+              `x='(iw-iw/zoom)/2':` +
+              `y='(ih-ih/zoom)/2 - (on/${totalFrames})*(ih/zoom)*0.08':` +
+              `d=${totalFrames}:s=${W}x${H}:fps=${fps}`;
+            break;
+        }
+        
+        // Build the full filter for this image
+        const baseFilter = `[${i}:v]scale=${scaleW}:${scaleH}:force_original_aspect_ratio=increase,` +
+          `crop=${scaleW}:${scaleH},${zoompanFilter},format=yuv420p,setpts=PTS-STARTPTS`;
+        
+        // Add fades
         if (i === 0) {
           return baseFilter + `,fade=t=in:st=0:d=${fadeDuration}[v${i}]`;
         } else if (i === images.length - 1) {
