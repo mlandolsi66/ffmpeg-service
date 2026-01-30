@@ -356,55 +356,51 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     const ambIdx = voiceIdx + 1;
     const overlayIdx = ambIdx + 1;
 
-    /* ---------- FILTER GRAPH (KEN BURNS WITH PAN + ZOOM) ---------- */
+    /* ---------- FILTER GRAPH (SIMPLE KEN BURNS - PROVEN) ---------- */
     const fadeDuration = 0.5;
-    const totalFrames = Math.floor(perImage * fps);
-    
-    // Scale up images for Ken Burns headroom (1.3x gives room to pan/zoom)
-    const scaleW = Math.round(W * 1.3);
-    const scaleH = Math.round(H * 1.3);
 
     let filter = images
       .map((_, i) => {
+        // Calculate frames for this specific image
+        const imgFrames = Math.ceil(perImage * fps);
+        
         // 4 different Ken Burns effects, cycling through
         const effect = i % 4;
         
-        let zoompanFilter;
+        let zoomExpr, xExpr, yExpr;
         
         switch (effect) {
           case 0:
-            // ZOOM IN + PAN RIGHT
-            zoompanFilter = `zoompan=z='1.0+on/${totalFrames}*0.15':` +
-              `x='(iw-iw/zoom)/2 + (on/${totalFrames})*(iw/zoom)*0.1':` +
-              `y='(ih-ih/zoom)/2':` +
-              `d=${totalFrames}:s=${W}x${H}:fps=${fps}`;
+            // SLOW ZOOM IN (center)
+            zoomExpr = `'min(zoom+0.0005,1.15)'`;
+            xExpr = `'iw/2-(iw/zoom/2)'`;
+            yExpr = `'ih/2-(ih/zoom/2)'`;
             break;
           case 1:
-            // ZOOM OUT + PAN LEFT
-            zoompanFilter = `zoompan=z='1.15-on/${totalFrames}*0.15':` +
-              `x='(iw-iw/zoom)/2 - (on/${totalFrames})*(iw/zoom)*0.1':` +
-              `y='(ih-ih/zoom)/2':` +
-              `d=${totalFrames}:s=${W}x${H}:fps=${fps}`;
+            // SLOW ZOOM OUT (center)
+            zoomExpr = `'if(eq(on,1),1.15,max(zoom-0.0005,1.0))'`;
+            xExpr = `'iw/2-(iw/zoom/2)'`;
+            yExpr = `'ih/2-(ih/zoom/2)'`;
             break;
           case 2:
-            // ZOOM IN + PAN DOWN
-            zoompanFilter = `zoompan=z='1.0+on/${totalFrames}*0.15':` +
-              `x='(iw-iw/zoom)/2':` +
-              `y='(ih-ih/zoom)/2 + (on/${totalFrames})*(ih/zoom)*0.08':` +
-              `d=${totalFrames}:s=${W}x${H}:fps=${fps}`;
+            // PAN LEFT TO RIGHT (slight zoom)
+            zoomExpr = `'min(zoom+0.0002,1.08)'`;
+            xExpr = `'if(eq(on,1),0,min(x+2,iw-iw/zoom))'`;
+            yExpr = `'ih/2-(ih/zoom/2)'`;
             break;
           case 3:
-            // ZOOM OUT + PAN UP
-            zoompanFilter = `zoompan=z='1.15-on/${totalFrames}*0.15':` +
-              `x='(iw-iw/zoom)/2':` +
-              `y='(ih-ih/zoom)/2 - (on/${totalFrames})*(ih/zoom)*0.08':` +
-              `d=${totalFrames}:s=${W}x${H}:fps=${fps}`;
+            // PAN RIGHT TO LEFT (slight zoom)
+            zoomExpr = `'min(zoom+0.0002,1.08)'`;
+            xExpr = `'if(eq(on,1),iw/zoom,max(x-2,0))'`;
+            yExpr = `'ih/2-(ih/zoom/2)'`;
             break;
         }
         
-        // Build the full filter for this image - ADDED setsar=1 to fix SAR mismatch
-        const baseFilter = `[${i}:v]scale=${scaleW}:${scaleH}:force_original_aspect_ratio=increase,` +
-          `crop=${scaleW}:${scaleH},${zoompanFilter},setsar=1,format=yuv420p,setpts=PTS-STARTPTS`;
+        // Build filter: scale up -> zoompan -> normalize
+        const baseFilter = 
+          `[${i}:v]scale=8000:-1,` +
+          `zoompan=z=${zoomExpr}:x=${xExpr}:y=${yExpr}:d=${imgFrames}:s=${W}x${H}:fps=${fps},` +
+          `setsar=1,format=yuv420p,setpts=PTS-STARTPTS`;
         
         // Add fades
         if (i === 0) {
