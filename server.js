@@ -188,12 +188,30 @@ async function download(url, dest) {
   fs.writeFileSync(dest, Buffer.from(await r.arrayBuffer()));
 }
 
+/* ------------------ RUN COMMAND (IMPROVED ERROR HANDLING) ------------------ */
 function run(cmd) {
-  return new Promise((res, rej) =>
-    exec(cmd, { maxBuffer: 1024 * 1024 * 200 }, (e, o, err) =>
-      e ? rej(new Error(err || o)) : res()
-    )
-  );
+  return new Promise((resolve, reject) => {
+    console.log("🔧 Executing FFmpeg...");
+    
+    exec(cmd, { maxBuffer: 1024 * 1024 * 500 }, (error, stdout, stderr) => {
+      if (error) {
+        console.error("❌ FFmpeg failed!");
+        console.error("❌ Exit code:", error.code);
+        console.error("❌ stderr (last 2000 chars):", stderr.slice(-2000));
+        console.error("❌ stdout (last 500 chars):", stdout.slice(-500));
+        reject(new Error(`FFmpeg failed: ${stderr.slice(-500) || error.message}`));
+        return;
+      }
+      
+      // Log warnings but don't fail
+      if (stderr && stderr.includes("Error") && !stderr.includes("deprecated")) {
+        console.warn("⚠️ FFmpeg warnings:", stderr.slice(-1000));
+      }
+      
+      console.log("✅ FFmpeg completed successfully");
+      resolve(stdout);
+    });
+  });
 }
 
 /* ------------------ SUPABASE UPLOAD ------------------ */
@@ -277,7 +295,7 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
       await download(images[i], `${dir}/img${i}.jpg`);
     }
     
-    // ✅ FIXED: Download as .mp3 (ElevenLabs returns MP3!)
+    // Download audio as MP3 (ElevenLabs returns MP3)
     await download(audioUrl, `${dir}/voice.mp3`);
     console.log("✅ Downloaded audio as voice.mp3");
 
@@ -304,7 +322,6 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     const endCardDuration = 2.5;
 
     /* ---------- DURATIONS ---------- */
-    // ✅ FIXED: Use voice.mp3
     const audioDur = ffprobeDuration(`${dir}/voice.mp3`);
     console.log("⏱ Narration duration:", audioDur);
 
@@ -314,6 +331,9 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     
     const fps = 25;
     const [W, H] = format === "9:16" ? [1080, 1920] : [1920, 1080];
+
+    console.log(`📐 Output resolution: ${W}x${H}`);
+    console.log(`🖼️ Images: ${numStoryImages}, ${perImage.toFixed(2)}s each`);
 
     /* ---------- INPUTS (LOCKED ORDER) ---------- */
     let cmdInputs = images
@@ -327,7 +347,6 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
       cmdInputs += ` -loop 1 -framerate ${fps} -t ${endCardDuration} -i "${endCardPath}"`;
     }
 
-    // ✅ FIXED: Use voice.mp3
     cmdInputs += ` -i "${dir}/voice.mp3"`;
     cmdInputs += ` -i "${ambPath}"`;
 
@@ -337,8 +356,8 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     const ambIdx = voiceIdx + 1;
     const overlayIdx = ambIdx + 1;
 
-    /* ---------- FILTER GRAPH (WITH KEN BURNS + FADE TRANSITIONS) ---------- */
-    const zoomFactor = 1.15;
+    /* ---------- FILTER GRAPH (FIXED - NO UPSCALING) ---------- */
+    const zoomFactor = 1.08; // Reduced zoom for stability
     const totalFrames = Math.floor(perImage * fps);
     const fadeDuration = 0.5;
 
@@ -346,15 +365,14 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
       .map((_, i) => {
         const zoomIn = i % 2 === 0;
         
+        // FIXED: Scale directly to output size, no 1.3x multiplier
         const baseFilter = zoomIn
-          ? `[${i}:v]scale=${W * 1.3}:${H * 1.3}:force_original_aspect_ratio=increase,` +
-            `crop=${W * 1.3}:${H * 1.3},` +
+          ? `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},` +
             `zoompan=z='min(1.0+on*${(zoomFactor - 1.0) / totalFrames},${zoomFactor})':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${W}x${H}:fps=${fps},` +
-            `trim=duration=${perImage},format=yuv420p,setpts=PTS-STARTPTS`
-          : `[${i}:v]scale=${W * 1.3}:${H * 1.3}:force_original_aspect_ratio=increase,` +
-            `crop=${W * 1.3}:${H * 1.3},` +
+            `format=yuv420p,setpts=PTS-STARTPTS`
+          : `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},` +
             `zoompan=z='max(${zoomFactor}-on*${(zoomFactor - 1.0) / totalFrames},1.0)':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${W}x${H}:fps=${fps},` +
-            `trim=duration=${perImage},format=yuv420p,setpts=PTS-STARTPTS`;
+            `format=yuv420p,setpts=PTS-STARTPTS`;
         
         if (i === 0) {
           return baseFilter + `,fade=t=in:st=0:d=${fadeDuration}[v${i}]`;
@@ -411,12 +429,21 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
       `-c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -movflags +faststart ` +
       `-c:a aac -b:a 160k "${out}"`;
 
-    console.log("🧠 FFmpeg command:\n", ffmpeg);
+    console.log("🧠 FFmpeg command length:", ffmpeg.length, "chars");
 
     await run(ffmpeg);
 
+    // Verify output exists
+    if (!fs.existsSync(out)) {
+      console.error("❌ FFmpeg completed but output file missing!");
+      console.error("❌ Directory contents:", fs.readdirSync(dir));
+      throw new Error("FFmpeg did not produce output file");
+    }
+
     /* ---------- UPLOAD TO SUPABASE ---------- */
     const buffer = fs.readFileSync(out);
+    console.log("📦 Output video size:", (buffer.length / 1024 / 1024).toFixed(2), "MB");
+    
     const publicUrl = await uploadToSupabase(videoId, buffer);
 
     /* ---------- UPDATE DB ---------- */
