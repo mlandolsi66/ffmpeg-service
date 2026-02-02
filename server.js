@@ -356,45 +356,24 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     const ambIdx = voiceIdx + 1;
     const overlayIdx = ambIdx + 1;
 
-    /* ---------- FILTER GRAPH (MINIMAL KEN BURNS - SAFE) ---------- */
+    /* ---------- FILTER GRAPH (ORIGINAL - STABLE) ---------- */
+    const zoomFactor = 1.15;
+    const totalFrames = Math.floor(perImage * fps);
     const fadeDuration = 0.5;
 
     let filter = images
       .map((_, i) => {
-        // Calculate frames for this specific image
-        const imgFrames = Math.ceil(perImage * fps);
+        const zoomIn = i % 2 === 0;
         
-        // 4 different Ken Burns effects, cycling through
-        const effect = i % 4;
+        // Scale image UP to give room for Ken Burns, then zoompan outputs at target size
+        const baseFilter = zoomIn
+          ? `[${i}:v]scale=${W * 1.3}:-1:force_original_aspect_ratio=increase,crop=${Math.round(W * 1.3)}:${Math.round(H * 1.3)},` +
+            `zoompan=z='min(1.0+on*${(zoomFactor - 1.0) / totalFrames},${zoomFactor})':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${W}x${H}:fps=${fps},` +
+            `setsar=1,trim=duration=${perImage},format=yuv420p,setpts=PTS-STARTPTS`
+          : `[${i}:v]scale=${W * 1.3}:-1:force_original_aspect_ratio=increase,crop=${Math.round(W * 1.3)}:${Math.round(H * 1.3)},` +
+            `zoompan=z='max(${zoomFactor}-on*${(zoomFactor - 1.0) / totalFrames},1.0)':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${W}x${H}:fps=${fps},` +
+            `setsar=1,trim=duration=${perImage},format=yuv420p,setpts=PTS-STARTPTS`;
         
-        let zoompanParams;
-        
-        switch (effect) {
-          case 0:
-            // SLOW ZOOM IN from center
-            zoompanParams = `z='min(zoom+0.0008,1.2)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'`;
-            break;
-          case 1:
-            // SLOW ZOOM OUT from center
-            zoompanParams = `z='if(eq(on,1),1.2,max(zoom-0.0008,1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'`;
-            break;
-          case 2:
-            // ZOOM IN from top-left to center
-            zoompanParams = `z='min(zoom+0.0008,1.2)':x='if(eq(on,1),0,min(x+1,iw/2-iw/zoom/2))':y='if(eq(on,1),0,min(y+1,ih/2-ih/zoom/2))'`;
-            break;
-          case 3:
-            // ZOOM IN from bottom-right to center  
-            zoompanParams = `z='min(zoom+0.0008,1.2)':x='if(eq(on,1),iw,max(x-1,iw/2-iw/zoom/2))':y='if(eq(on,1),ih,max(y-1,ih/2-ih/zoom/2))'`;
-            break;
-        }
-        
-        // Simple filter: scale to fixed size -> zoompan -> output
-        const baseFilter = 
-          `[${i}:v]scale=${W*2}:${H*2},setsar=1,` +
-          `zoompan=${zoompanParams}:d=${imgFrames}:s=${W}x${H}:fps=${fps},` +
-          `format=yuv420p,setpts=PTS-STARTPTS`;
-        
-        // Add fades
         if (i === 0) {
           return baseFilter + `,fade=t=in:st=0:d=${fadeDuration}[v${i}]`;
         } else if (i === images.length - 1) {
