@@ -370,7 +370,7 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
       .map((_, i) => {
         const effect = i % 4;
 
-        let panFilter;
+         let panFilter;
         switch (effect) {
           case 0:
             // PAN LEFT TO RIGHT (smooth, frame-locked)
