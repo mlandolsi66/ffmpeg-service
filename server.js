@@ -356,32 +356,21 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     const ambIdx = voiceIdx + 1;
     const overlayIdx = ambIdx + 1;
 
-    /* ---------- FILTER GRAPH (ORIGINAL - STABLE) ---------- */
-    const zoomFactor = 1.15;
+    /* ---------- FILTER GRAPH (NO SCALING - USE FAL IMAGES DIRECTLY) ---------- */
+    const zoomFactor = 1.10;  // Gentle 10% zoom
     const totalFrames = Math.floor(perImage * fps);
     const fadeDuration = 0.5;
-    
-    // Ensure all dimensions are EVEN (required by x264)
-    const outW = W % 2 === 0 ? W : W - 1;
-    const outH = H % 2 === 0 ? H : H - 1;
-    
-    // Ken Burns needs extra pixels for zoom headroom (also even)
-    const cropW = Math.round(outW * 1.3);
-    const cropH = Math.round(outH * 1.3);
-    const evenCropW = cropW % 2 === 0 ? cropW : cropW - 1;
-    const evenCropH = cropH % 2 === 0 ? cropH : cropH - 1;
 
     let filter = images
       .map((_, i) => {
         const zoomIn = i % 2 === 0;
         
-        // Scale to exact crop dimensions, then zoompan outputs at target size
+        // NO SCALING - images come from FAL at correct size (1080x1920 or 1920x1080)
+        // Just apply gentle zoom in/out from center
         const baseFilter = zoomIn
-          ? `[${i}:v]scale=${evenCropW}:${evenCropH},setsar=1,` +
-            `zoompan=z='min(1.0+on*${(zoomFactor - 1.0) / totalFrames},${zoomFactor})':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${outW}x${outH}:fps=${fps},` +
+          ? `[${i}:v]setsar=1,zoompan=z='min(1.0+on*${(zoomFactor - 1.0) / totalFrames},${zoomFactor})':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${W}x${H}:fps=${fps},` +
             `trim=duration=${perImage},format=yuv420p,setpts=PTS-STARTPTS`
-          : `[${i}:v]scale=${evenCropW}:${evenCropH},setsar=1,` +
-            `zoompan=z='max(${zoomFactor}-on*${(zoomFactor - 1.0) / totalFrames},1.0)':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${outW}x${outH}:fps=${fps},` +
+          : `[${i}:v]setsar=1,zoompan=z='max(${zoomFactor}-on*${(zoomFactor - 1.0) / totalFrames},1.0)':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${W}x${H}:fps=${fps},` +
             `trim=duration=${perImage},format=yuv420p,setpts=PTS-STARTPTS`;
         
         if (i === 0) {
