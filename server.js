@@ -356,13 +356,40 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     const ambIdx = voiceIdx + 1;
     const overlayIdx = ambIdx + 1;
 
-    /* ---------- FILTER GRAPH (SIMPLE - NO ZOOM, JUST FADES) ---------- */
+    /* ---------- FILTER GRAPH (4 PAN MOVEMENTS TO MAKE IT ALIVE) ---------- */
     const fadeDuration = 0.5;
+    const totalFrames = Math.floor(perImage * fps);
+    
+    // Scale images slightly larger to have room for panning (10% extra)
+    const scaleW = Math.round(W * 1.1);
+    const scaleH = Math.round(H * 1.1);
+    const panDistance = Math.round(W * 0.1); // 10% pan distance
 
     let filter = images
       .map((_, i) => {
-        // Scale to fill exact output size, crop if needed (no black bars)
-        const baseFilter = `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1,fps=${fps},format=yuv420p,setpts=PTS-STARTPTS`;
+        const effect = i % 4;
+        
+        let panFilter;
+        switch (effect) {
+          case 0:
+            // PAN LEFT TO RIGHT
+            panFilter = `crop=${W}:${H}:x='(${scaleW}-${W})*t/${perImage}':y='(${scaleH}-${H})/2'`;
+            break;
+          case 1:
+            // PAN RIGHT TO LEFT
+            panFilter = `crop=${W}:${H}:x='(${scaleW}-${W})*(1-t/${perImage})':y='(${scaleH}-${H})/2'`;
+            break;
+          case 2:
+            // PAN TOP TO BOTTOM
+            panFilter = `crop=${W}:${H}:x='(${scaleW}-${W})/2':y='(${scaleH}-${H})*t/${perImage}'`;
+            break;
+          case 3:
+            // PAN BOTTOM TO TOP
+            panFilter = `crop=${W}:${H}:x='(${scaleW}-${W})/2':y='(${scaleH}-${H})*(1-t/${perImage})'`;
+            break;
+        }
+        
+        const baseFilter = `[${i}:v]scale=${scaleW}:${scaleH}:force_original_aspect_ratio=increase,crop=${scaleW}:${scaleH},${panFilter},setsar=1,fps=${fps},format=yuv420p,setpts=PTS-STARTPTS`;
         
         if (i === 0) {
           return baseFilter + `,fade=t=in:st=0:d=${fadeDuration}[v${i}]`;
