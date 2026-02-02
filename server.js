@@ -361,8 +361,8 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
 
     let filter = images
       .map((_, i) => {
-        // Just scale to exact output size (in case FAL returns slightly different), then fade
-        const baseFilter = `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps},format=yuv420p,setpts=PTS-STARTPTS`;
+        // Scale to fill exact output size, crop if needed (no black bars)
+        const baseFilter = `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1,fps=${fps},format=yuv420p,setpts=PTS-STARTPTS`;
         
         if (i === 0) {
           return baseFilter + `,fade=t=in:st=0:d=${fadeDuration}[v${i}]`;
