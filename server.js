@@ -365,6 +365,7 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     const scaleH = Math.round(H * 1.1);
     const panDistance = Math.round(W * 0.1); // 10% pan distance
 
+    const denom = Math.max(totalFrames - 1, 1);
     let filter = images
       .map((_, i) => {
         const effect = i % 4;
