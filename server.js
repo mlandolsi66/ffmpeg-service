@@ -356,22 +356,13 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     const ambIdx = voiceIdx + 1;
     const overlayIdx = ambIdx + 1;
 
-    /* ---------- FILTER GRAPH (NO SCALING - USE FAL IMAGES DIRECTLY) ---------- */
-    const zoomFactor = 1.10;  // Gentle 10% zoom
-    const totalFrames = Math.floor(perImage * fps);
+    /* ---------- FILTER GRAPH (SIMPLE - NO ZOOM, JUST FADES) ---------- */
     const fadeDuration = 0.5;
 
     let filter = images
       .map((_, i) => {
-        const zoomIn = i % 2 === 0;
-        
-        // NO SCALING - images come from FAL at correct size (1080x1920 or 1920x1080)
-        // Just apply gentle zoom in/out from center
-        const baseFilter = zoomIn
-          ? `[${i}:v]setsar=1,zoompan=z='min(1.0+on*${(zoomFactor - 1.0) / totalFrames},${zoomFactor})':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${W}x${H}:fps=${fps},` +
-            `trim=duration=${perImage},format=yuv420p,setpts=PTS-STARTPTS`
-          : `[${i}:v]setsar=1,zoompan=z='max(${zoomFactor}-on*${(zoomFactor - 1.0) / totalFrames},1.0)':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${W}x${H}:fps=${fps},` +
-            `trim=duration=${perImage},format=yuv420p,setpts=PTS-STARTPTS`;
+        // Just scale to exact output size (in case FAL returns slightly different), then fade
+        const baseFilter = `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps},format=yuv420p,setpts=PTS-STARTPTS`;
         
         if (i === 0) {
           return baseFilter + `,fade=t=in:st=0:d=${fadeDuration}[v${i}]`;
