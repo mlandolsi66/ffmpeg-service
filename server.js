@@ -360,17 +360,21 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     const zoomFactor = 1.15;
     const totalFrames = Math.floor(perImage * fps);
     const fadeDuration = 0.5;
+    
+    // Ken Burns needs extra pixels for zoom headroom
+    const cropW = Math.round(W * 1.3);
+    const cropH = Math.round(H * 1.3);
 
     let filter = images
       .map((_, i) => {
         const zoomIn = i % 2 === 0;
         
-        // Scale image UP to give room for Ken Burns, then zoompan outputs at target size
+        // FIXED: Scale to EXACT crop dimensions (not relative), then zoompan outputs at target size
         const baseFilter = zoomIn
-          ? `[${i}:v]scale=${W * 1.3}:-1:force_original_aspect_ratio=increase,crop=${Math.round(W * 1.3)}:${Math.round(H * 1.3)},` +
+          ? `[${i}:v]scale=${cropW}:${cropH}:force_original_aspect_ratio=increase,crop=${cropW}:${cropH},` +
             `zoompan=z='min(1.0+on*${(zoomFactor - 1.0) / totalFrames},${zoomFactor})':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${W}x${H}:fps=${fps},` +
             `setsar=1,trim=duration=${perImage},format=yuv420p,setpts=PTS-STARTPTS`
-          : `[${i}:v]scale=${W * 1.3}:-1:force_original_aspect_ratio=increase,crop=${Math.round(W * 1.3)}:${Math.round(H * 1.3)},` +
+          : `[${i}:v]scale=${cropW}:${cropH}:force_original_aspect_ratio=increase,crop=${cropW}:${cropH},` +
             `zoompan=z='max(${zoomFactor}-on*${(zoomFactor - 1.0) / totalFrames},1.0)':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${W}x${H}:fps=${fps},` +
             `setsar=1,trim=duration=${perImage},format=yuv420p,setpts=PTS-STARTPTS`;
         
