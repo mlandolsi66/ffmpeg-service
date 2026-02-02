@@ -368,24 +368,39 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     let filter = images
       .map((_, i) => {
         const effect = i % 4;
-        
+
         let panFilter;
         switch (effect) {
           case 0:
-            // PAN LEFT TO RIGHT
-            panFilter = `crop=${W}:${H}:x='(${scaleW}-${W})*t/${perImage}':y='(${scaleH}-${H})/2'`;
+            // PAN LEFT TO RIGHT (smooth, frame-locked)
+            panFilter =
+              `crop=${W}:${H}:` +
+              `x='max(0,min(${scaleW - W},(${scaleW}-${W})*n/${denom}))':` +
+              `y='(${scaleH}-${H})/2'`;
             break;
+
           case 1:
-            // PAN RIGHT TO LEFT
-            panFilter = `crop=${W}:${H}:x='(${scaleW}-${W})*(1-t/${perImage})':y='(${scaleH}-${H})/2'`;
+            // PAN RIGHT TO LEFT (smooth, frame-locked)
+            panFilter =
+              `crop=${W}:${H}:` +
+              `x='max(0,min(${scaleW - W},(${scaleW}-${W})*(1-n/${denom})))':` +
+              `y='(${scaleH}-${H})/2'`;
             break;
+
           case 2:
-            // PAN TOP TO BOTTOM
-            panFilter = `crop=${W}:${H}:x='(${scaleW}-${W})/2':y='(${scaleH}-${H})*t/${perImage}'`;
+            // PAN TOP TO BOTTOM (smooth, frame-locked)
+            panFilter =
+              `crop=${W}:${H}:` +
+              `x='(${scaleW}-${W})/2':` +
+              `y='max(0,min(${scaleH - H},(${scaleH}-${H})*n/${denom}))'`;
             break;
+
           case 3:
-            // PAN BOTTOM TO TOP
-            panFilter = `crop=${W}:${H}:x='(${scaleW}-${W})/2':y='(${scaleH}-${H})*(1-t/${perImage})'`;
+            // PAN BOTTOM TO TOP (smooth, frame-locked)
+            panFilter =
+              `crop=${W}:${H}:` +
+              `x='(${scaleW}-${W})/2':` +
+              `y='max(0,min(${scaleH - H},(${scaleH}-${H})*(1-n/${denom})))'`;
             break;
         }
         
