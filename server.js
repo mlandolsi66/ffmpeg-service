@@ -361,22 +361,28 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     const totalFrames = Math.floor(perImage * fps);
     const fadeDuration = 0.5;
     
-    // Ken Burns needs extra pixels for zoom headroom
-    const cropW = Math.round(W * 1.3);
-    const cropH = Math.round(H * 1.3);
+    // Ensure all dimensions are EVEN (required by x264)
+    const outW = W % 2 === 0 ? W : W - 1;
+    const outH = H % 2 === 0 ? H : H - 1;
+    
+    // Ken Burns needs extra pixels for zoom headroom (also even)
+    const cropW = Math.round(outW * 1.3);
+    const cropH = Math.round(outH * 1.3);
+    const evenCropW = cropW % 2 === 0 ? cropW : cropW - 1;
+    const evenCropH = cropH % 2 === 0 ? cropH : cropH - 1;
 
     let filter = images
       .map((_, i) => {
         const zoomIn = i % 2 === 0;
         
-        // FIXED: Scale to EXACT crop dimensions (not relative), then zoompan outputs at target size
+        // Scale to exact crop dimensions, then zoompan outputs at target size
         const baseFilter = zoomIn
-          ? `[${i}:v]scale=${cropW}:${cropH}:force_original_aspect_ratio=increase,crop=${cropW}:${cropH},` +
-            `zoompan=z='min(1.0+on*${(zoomFactor - 1.0) / totalFrames},${zoomFactor})':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${W}x${H}:fps=${fps},` +
-            `setsar=1,trim=duration=${perImage},format=yuv420p,setpts=PTS-STARTPTS`
-          : `[${i}:v]scale=${cropW}:${cropH}:force_original_aspect_ratio=increase,crop=${cropW}:${cropH},` +
-            `zoompan=z='max(${zoomFactor}-on*${(zoomFactor - 1.0) / totalFrames},1.0)':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${W}x${H}:fps=${fps},` +
-            `setsar=1,trim=duration=${perImage},format=yuv420p,setpts=PTS-STARTPTS`;
+          ? `[${i}:v]scale=${evenCropW}:${evenCropH},setsar=1,` +
+            `zoompan=z='min(1.0+on*${(zoomFactor - 1.0) / totalFrames},${zoomFactor})':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${outW}x${outH}:fps=${fps},` +
+            `trim=duration=${perImage},format=yuv420p,setpts=PTS-STARTPTS`
+          : `[${i}:v]scale=${evenCropW}:${evenCropH},setsar=1,` +
+            `zoompan=z='max(${zoomFactor}-on*${(zoomFactor - 1.0) / totalFrames},1.0)':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${outW}x${outH}:fps=${fps},` +
+            `trim=duration=${perImage},format=yuv420p,setpts=PTS-STARTPTS`;
         
         if (i === 0) {
           return baseFilter + `,fade=t=in:st=0:d=${fadeDuration}[v${i}]`;
