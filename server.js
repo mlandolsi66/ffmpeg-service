@@ -361,51 +361,43 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     const totalFrames = Math.floor(perImage * fps);
     
     // Scale images slightly larger to have room for panning (10% extra)
+    // Ensure even dimensions for x264
     const scaleW = Math.round(W * 1.1);
     const scaleH = Math.round(H * 1.1);
-    const panDistance = Math.round(W * 0.1); // 10% pan distance
+    const evenScaleW = scaleW % 2 === 0 ? scaleW : scaleW + 1;
+    const evenScaleH = scaleH % 2 === 0 ? scaleH : scaleH + 1;
+    
+    // Pan distance (how far to move)
+    const panX = evenScaleW - W;
+    const panY = evenScaleH - H;
 
-    const denom = Math.max(totalFrames - 1, 1);
     let filter = images
       .map((_, i) => {
         const effect = i % 4;
-
-         let panFilter;
+        
+        // Use 'n' (frame number) for smooth animation
+        // Linear interpolation: start + (end - start) * (n / totalFrames)
+        let panFilter;
         switch (effect) {
           case 0:
-            // PAN LEFT TO RIGHT (smooth, frame-locked)
-            panFilter =
-              `crop=${W}:${H}:` +
-              `x='max(0,min(${scaleW - W},(${scaleW}-${W})*n/${denom}))':` +
-              `y='(${scaleH}-${H})/2'`;
+            // PAN LEFT TO RIGHT
+            panFilter = `crop=${W}:${H}:x='${panX}*n/${totalFrames}':y='${panY}/2'`;
             break;
-
           case 1:
-            // PAN RIGHT TO LEFT (smooth, frame-locked)
-            panFilter =
-              `crop=${W}:${H}:` +
-              `x='max(0,min(${scaleW - W},(${scaleW}-${W})*(1-n/${denom})))':` +
-              `y='(${scaleH}-${H})/2'`;
+            // PAN RIGHT TO LEFT
+            panFilter = `crop=${W}:${H}:x='${panX}-${panX}*n/${totalFrames}':y='${panY}/2'`;
             break;
-
           case 2:
-            // PAN TOP TO BOTTOM (smooth, frame-locked)
-            panFilter =
-              `crop=${W}:${H}:` +
-              `x='(${scaleW}-${W})/2':` +
-              `y='max(0,min(${scaleH - H},(${scaleH}-${H})*n/${denom}))'`;
+            // PAN TOP TO BOTTOM
+            panFilter = `crop=${W}:${H}:x='${panX}/2':y='${panY}*n/${totalFrames}'`;
             break;
-
           case 3:
-            // PAN BOTTOM TO TOP (smooth, frame-locked)
-            panFilter =
-              `crop=${W}:${H}:` +
-              `x='(${scaleW}-${W})/2':` +
-              `y='max(0,min(${scaleH - H},(${scaleH}-${H})*(1-n/${denom})))'`;
+            // PAN BOTTOM TO TOP
+            panFilter = `crop=${W}:${H}:x='${panX}/2':y='${panY}-${panY}*n/${totalFrames}'`;
             break;
         }
         
-        const baseFilter = `[${i}:v]scale=${scaleW}:${scaleH}:force_original_aspect_ratio=increase,crop=${scaleW}:${scaleH},${panFilter},setsar=1,fps=${fps},format=yuv420p,setpts=PTS-STARTPTS`;
+        const baseFilter = `[${i}:v]scale=${evenScaleW}:${evenScaleH},fps=${fps},${panFilter},setsar=1,format=yuv420p,setpts=PTS-STARTPTS`;
         
         if (i === 0) {
           return baseFilter + `,fade=t=in:st=0:d=${fadeDuration}[v${i}]`;
