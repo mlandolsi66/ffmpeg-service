@@ -284,7 +284,7 @@ async function updateVideoStatus(videoId, status, videoUrl = null) {
 }
 
 /* ------------------ RENDER (ASYNC) ------------------ */
-async function renderVideo(videoId, images, audioUrl, format, theme) {
+async function renderVideo(videoId, images, audioUrl, format, theme, sceneTimings = null) {
   const dir = `/tmp/${videoId}`;
 
   try {
@@ -321,25 +321,54 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     const endCardPath = getEndCard(format);
     const endCardDuration = 2.5;
 
+   
     /* ---------- DURATIONS ---------- */
     const audioDur = ffprobeDuration(`${dir}/voice.mp3`);
     console.log("⏱ Narration duration:", audioDur);
 
     const storyDuration = endCardPath ? audioDur - endCardDuration : audioDur;
     const numStoryImages = images.length;
-    const perImage = Math.max(storyDuration / numStoryImages, 3);
     
     const fps = 25;
     const [W, H] = format === "9:16" ? [1080, 1920] : [1920, 1080];
 
+    // Calculate per-image durations
+    let imageDurations = [];
+    
+    if (sceneTimings && sceneTimings.length === numStoryImages) {
+      // Use provided timings (word count based)
+      const totalWords = sceneTimings.reduce((sum, s) => sum + s.wordCount, 0);
+      
+      imageDurations = sceneTimings.map(scene => {
+        const proportion = scene.wordCount / totalWords;
+        const duration = Math.max(storyDuration * proportion, 3); // minimum 3 seconds
+        return duration;
+      });
+      
+      // Adjust to match exact audio duration
+      const totalCalculated = imageDurations.reduce((sum, d) => sum + d, 0);
+      const adjustmentFactor = storyDuration / totalCalculated;
+      imageDurations = imageDurations.map(d => d * adjustmentFactor);
+      
+      console.log("⏱ Using word-count based timings:");
+      imageDurations.forEach((d, i) => {
+        console.log(`   Scene ${i + 1}: ${d.toFixed(2)}s (${sceneTimings[i].wordCount} words)`);
+      });
+    } else {
+      // Fallback: equal duration for all images
+      const perImage = Math.max(storyDuration / numStoryImages, 3);
+      imageDurations = images.map(() => perImage);
+      console.log(`🖼️ Using equal split: ${perImage.toFixed(2)}s per image`);
+    }
+
     console.log(`📐 Output resolution: ${W}x${H}`);
-    console.log(`🖼️ Images: ${numStoryImages}, ${perImage.toFixed(2)}s each`);
+    console.log(`🖼️ Images: ${numStoryImages}, total story duration: ${storyDuration.toFixed(2)}s`);
 
     /* ---------- INPUTS (LOCKED ORDER) ---------- */
     let cmdInputs = images
       .map(
         (_, i) =>
-          `-loop 1 -framerate ${fps} -t ${perImage} -i "${dir}/img${i}.jpg"`
+          `-loop 1 -framerate ${fps} -t ${imageDurations[i]} -i "${dir}/img${i}.jpg"`
       )
       .join(" ");
 
@@ -358,7 +387,7 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
 
     /* ---------- FILTER GRAPH (4 PAN MOVEMENTS TO MAKE IT ALIVE) ---------- */
     const fadeDuration = 0.5;
-    const totalFrames = Math.floor(perImage * fps);
+    //const totalFrames = Math.floor(perImage * fps);
     
     // Scale images slightly larger to have room for panning (10% extra)
     const scaleW = Math.round(W * 1.1);
@@ -366,14 +395,18 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
     const panDistance = Math.round(W * 0.1); // 10% pan distance
 
     const denom = Math.max(totalFrames - 1, 1);
-    let filter = images
+      let filter = images
       .map((_, i) => {
+        const duration = imageDurations[i];
+        const totalFrames = Math.floor(duration * fps);
+        const denom = Math.max(totalFrames - 1, 1);
+        
         const effect = i % 4;
 
-         let panFilter;
+        let panFilter;
         switch (effect) {
           case 0:
-            // PAN LEFT TO RIGHT (smooth, frame-locked)
+            // PAN LEFT TO RIGHT
             panFilter =
               `crop=${W}:${H}:` +
               `x='max(0,min(${scaleW - W},(${scaleW}-${W})*n/${denom}))':` +
@@ -381,7 +414,7 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
             break;
 
           case 1:
-            // PAN RIGHT TO LEFT (smooth, frame-locked)
+            // PAN RIGHT TO LEFT
             panFilter =
               `crop=${W}:${H}:` +
               `x='max(0,min(${scaleW - W},(${scaleW}-${W})*(1-n/${denom})))':` +
@@ -389,7 +422,7 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
             break;
 
           case 2:
-            // PAN TOP TO BOTTOM (smooth, frame-locked)
+            // PAN TOP TO BOTTOM
             panFilter =
               `crop=${W}:${H}:` +
               `x='(${scaleW}-${W})/2':` +
@@ -397,7 +430,7 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
             break;
 
           case 3:
-            // PAN BOTTOM TO TOP (smooth, frame-locked)
+            // PAN BOTTOM TO TOP
             panFilter =
               `crop=${W}:${H}:` +
               `x='(${scaleW}-${W})/2':` +
@@ -410,9 +443,9 @@ async function renderVideo(videoId, images, audioUrl, format, theme) {
         if (i === 0) {
           return baseFilter + `,fade=t=in:st=0:d=${fadeDuration}[v${i}]`;
         } else if (i === images.length - 1) {
-          return baseFilter + `,fade=t=out:st=${perImage - fadeDuration}:d=${fadeDuration}[v${i}]`;
+          return baseFilter + `,fade=t=out:st=${duration - fadeDuration}:d=${fadeDuration}[v${i}]`;
         } else {
-          return baseFilter + `,fade=t=in:st=0:d=${fadeDuration},fade=t=out:st=${perImage - fadeDuration}:d=${fadeDuration}[v${i}]`;
+          return baseFilter + `,fade=t=in:st=0:d=${fadeDuration},fade=t=out:st=${duration - fadeDuration}:d=${fadeDuration}[v${i}]`;
         }
       })
       .join(";");
@@ -512,6 +545,8 @@ app.post("/render", async (req, res) => {
 
     console.log("🎬 Render request:", { videoId, format, theme });
     console.log("🖼 Images:", images?.length);
+    console.log("⏱ Scene timings:", sceneTimings ? "provided" : "not provided (will use equal split)");
+
 
     if (!videoId || !images?.length || !audioUrl) {
       return res.status(400).json({ error: "Missing inputs" });
@@ -525,12 +560,13 @@ app.post("/render", async (req, res) => {
       videoId,
     });
 
-    renderVideo(videoId, images, audioUrl, format, theme).catch((e) => {
+    renderVideo(videoId, images, audioUrl, format, theme, sceneTimings).catch((e) => {
       console.error("🔥 Background render failed:", e);
     });
+    
   } catch (e) {
     console.error("🔥 /render endpoint failed:", e);
-    res.status(500).json({
+      res.status(500).json({
       error: "render failed",
       details: String(e.message || e),
     });
