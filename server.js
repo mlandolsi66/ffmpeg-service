@@ -453,25 +453,25 @@ async function renderVideo(videoId, images, audioUrl, format, theme, sceneTiming
     const endCardIdx = images.length;
 
     if (endCardPath) {
-      filter += `;[${endCardIdx}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=${fps},format=yuv420p,setpts=PTS-STARTPTS,fade=t=in:st=0:d=${fadeDuration}[vendcard]`;
+      filter += `;[${endCardIdx}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1,fps=${fps},format=yuv420p,setpts=PTS-STARTPTS,fade=t=in:st=0:d=${fadeDuration}[vendcard]`;
       
       filter +=
         ";" +
         images.map((_, i) => `[v${i}]`).join("") +
         `[vendcard]concat=n=${images.length + 1}:v=1:a=0[vconcat];` +
-        `[vconcat]trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
+        `[vconcat]setsar=1,trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
     } else {
       filter +=
         ";" +
         images.map((_, i) => `[v${i}]`).join("") +
         `concat=n=${images.length}:v=1:a=0[vconcat];` +
-        `[vconcat]trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
+        `[vconcat]setsar=1,trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
     }
 
     if (overlayPath) {
       filter +=
-        `;[${overlayIdx}:v]scale=${W}:${H},fps=${fps},format=rgba,` +
-        `colorchannelmixer=aa=0.25,setpts=PTS-STARTPTS[ov]` +
+        `;[${overlayIdx}:v]scale=${W}:${H},setsar=1,fps=${fps},format=rgba,` +
+        `colorchannelmixer=aa=0.25,setpts=PTS-STARTPTS[ov]`
         `;[base][ov]overlay=shortest=1:format=auto[v]`;
     } else {
       filter += `;[base]copy[v]`;
