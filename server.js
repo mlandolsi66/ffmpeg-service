@@ -96,6 +96,10 @@ function getEndCard(format) {
     "endcards",
     format === "9:16" ? "endcard_9x16.jpg" : "endcard_16x9.jpg"
   );
+  if (endCardPath) {
+      console.log("🧪 Endcard SAR check:");
+      console.log(execSync(`ffprobe -v error -select_streams v:0 -show_entries stream=sample_aspect_ratio -of default=nw=1 "${endCardPath}"`).toString());
+  }
 
   if (fs.existsSync(endCardPath)) {
     console.log("🎬 Using end card:", endCardPath);
@@ -471,7 +475,7 @@ async function renderVideo(videoId, images, audioUrl, format, theme, sceneTiming
     if (overlayPath) {
       filter +=
         `;[${overlayIdx}:v]scale=${W}:${H},setsar=1,fps=${fps},format=rgba,` +
-        `colorchannelmixer=aa=0.25,setpts=PTS-STARTPTS[ov]`
+        `colorchannelmixer=aa=0.25,setpts=PTS-STARTPTS[ov]` +
         `;[base][ov]overlay=shortest=1:format=auto[v]`;
     } else {
       filter += `;[base]copy[v]`;
