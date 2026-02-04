@@ -394,7 +394,7 @@ async function renderVideo(videoId, images, audioUrl, format, theme, sceneTiming
     const scaleH = Math.round(H * 1.1);
     const panDistance = Math.round(W * 0.1); // 10% pan distance
 
-    const denom = Math.max(totalFrames - 1, 1);
+    //const denom = Math.max(totalFrames - 1, 1);
       let filter = images
       .map((_, i) => {
         const duration = imageDurations[i];
@@ -541,7 +541,7 @@ async function renderVideo(videoId, images, audioUrl, format, theme, sceneTiming
 /* ------------------ ENDPOINT ------------------ */
 app.post("/render", async (req, res) => {
   try {
-    const { videoId, images, audioUrl, format = "9:16", theme = "" } = req.body;
+    const { videoId, images, audioUrl, format = "9:16", theme = "", sceneTimings = null } = req.body;
 
     console.log("🎬 Render request:", { videoId, format, theme });
     console.log("🖼 Images:", images?.length);
