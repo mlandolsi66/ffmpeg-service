@@ -96,10 +96,6 @@ function getEndCard(format) {
     "endcards",
     format === "9:16" ? "endcard_9x16.jpg" : "endcard_16x9.jpg"
   );
-  if (endCardPath) {
-      console.log("🧪 Endcard SAR check:");
-      console.log(execSync(`ffprobe -v error -select_streams v:0 -show_entries stream=sample_aspect_ratio -of default=nw=1 "${endCardPath}"`).toString());
-  }
 
   if (fs.existsSync(endCardPath)) {
     console.log("🎬 Using end card:", endCardPath);
@@ -391,15 +387,12 @@ async function renderVideo(videoId, images, audioUrl, format, theme, sceneTiming
 
     /* ---------- FILTER GRAPH (4 PAN MOVEMENTS TO MAKE IT ALIVE) ---------- */
     const fadeDuration = 0.5;
-    //const totalFrames = Math.floor(perImage * fps);
     
     // Scale images slightly larger to have room for panning (10% extra)
     const scaleW = Math.round(W * 1.1);
     const scaleH = Math.round(H * 1.1);
-    const panDistance = Math.round(W * 0.1); // 10% pan distance
 
-    //const denom = Math.max(totalFrames - 1, 1);
-      let filter = images
+    let filter = images
       .map((_, i) => {
         const duration = imageDurations[i];
         const totalFrames = Math.floor(duration * fps);
@@ -442,7 +435,8 @@ async function renderVideo(videoId, images, audioUrl, format, theme, sceneTiming
             break;
         }
         
-        const baseFilter = `[${i}:v]scale=${scaleW}:${scaleH}:force_original_aspect_ratio=increase,crop=${scaleW}:${scaleH},${panFilter},setsar=1,fps=${fps},format=yuv420p,setpts=PTS-STARTPTS`;
+        // CRITICAL FIX: Apply setsar=1 BEFORE any concat to ensure SAR consistency
+        const baseFilter = `[${i}:v]scale=${scaleW}:${scaleH}:force_original_aspect_ratio=increase,crop=${scaleW}:${scaleH},${panFilter},fps=${fps},format=yuv420p,setsar=1,setpts=PTS-STARTPTS`;
         
         if (i === 0) {
           return baseFilter + `,fade=t=in:st=0:d=${fadeDuration}[v${i}]`;
@@ -457,24 +451,25 @@ async function renderVideo(videoId, images, audioUrl, format, theme, sceneTiming
     const endCardIdx = images.length;
 
     if (endCardPath) {
-      filter += `;[${endCardIdx}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1,fps=${fps},format=yuv420p,setpts=PTS-STARTPTS,fade=t=in:st=0:d=${fadeDuration}[vendcard]`;
+      // CRITICAL FIX: Set SAR=1 on end card BEFORE concat to match other streams
+      filter += `;[${endCardIdx}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=${fps},format=yuv420p,setsar=1,setpts=PTS-STARTPTS,fade=t=in:st=0:d=${fadeDuration}[vendcard]`;
       
       filter +=
         ";" +
         images.map((_, i) => `[v${i}]`).join("") +
         `[vendcard]concat=n=${images.length + 1}:v=1:a=0[vconcat];` +
-        `[vconcat]setsar=1,trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
+        `[vconcat]trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
     } else {
       filter +=
         ";" +
         images.map((_, i) => `[v${i}]`).join("") +
         `concat=n=${images.length}:v=1:a=0[vconcat];` +
-        `[vconcat]setsar=1,trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
+        `[vconcat]trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
     }
 
     if (overlayPath) {
       filter +=
-        `;[${overlayIdx}:v]scale=${W}:${H},setsar=1,fps=${fps},format=rgba,` +
+        `;[${overlayIdx}:v]scale=${W}:${H},fps=${fps},format=rgba,setsar=1,` +
         `colorchannelmixer=aa=0.25,setpts=PTS-STARTPTS[ov]` +
         `;[base][ov]overlay=shortest=1:format=auto[v]`;
     } else {
