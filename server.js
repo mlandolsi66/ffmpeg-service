@@ -468,10 +468,14 @@ async function renderVideo(videoId, images, audioUrl, format, theme, sceneTiming
     }
 
     if (overlayPath) {
+      // CRITICAL: Process overlay to match base video properties EXACTLY
+      // This prevents "Failed to configure output pad" errors during runtime
       filter +=
-        `;[${overlayIdx}:v]scale=${W}:${H},fps=${fps},format=rgba,setsar=1,` +
+        `;[${overlayIdx}:v]scale=${W}:${H}:force_original_aspect_ratio=decrease,` +
+        `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,` +
+        `fps=${fps},format=yuva420p,setsar=1,` +
         `colorchannelmixer=aa=0.25,setpts=PTS-STARTPTS[ov]` +
-        `;[base][ov]overlay=shortest=1:format=auto[v]`;
+        `;[base][ov]overlay=shortest=1:format=yuv420[v]`;
     } else {
       filter += `;[base]copy[v]`;
     }
