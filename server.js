@@ -473,12 +473,10 @@ async function renderVideo(videoId, images, audioUrl, format, theme, sceneTiming
         `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,` +
         `fps=${fps},format=yuva420p,setsar=1,` +
         `colorchannelmixer=aa=0.25,setpts=PTS-STARTPTS[ov]` +
-        // 1. Force the overlay filter to use yuv420 internally
-        // 2. IMMEDIATELY convert the result to yuv420p to satisfy libx264
-        `;[base][ov]overlay=shortest=1:format=yuv420[v_pre]` +
+        // The [v_pre] and format=yuv420p is the wall that stops the ARGB crash
+        `;[base][ov]overlay=shortest=1:format=yuv420[v_pre]` + 
         `;[v_pre]format=yuv420p[v]`; 
     } else {
-      // Even without an overlay, force the format one last time for safety
       filter += `;[base]format=yuv420p[v]`;
     }
 
