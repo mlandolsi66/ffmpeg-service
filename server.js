@@ -475,7 +475,7 @@ async function renderVideo(videoId, images, audioUrl, format, theme, sceneTiming
         `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,` +
         `fps=${fps},format=yuva420p,setsar=1,` +
         `colorchannelmixer=aa=0.25,setpts=PTS-STARTPTS[ov]` +
-        `;[base][ov]overlay=shortest=1:format=yuv420p[v]`;
+        `;[base][ov]overlay=shortest=1:format=auto[v]`;
     } else {
       filter += `;[base]copy[v]`;
     }
