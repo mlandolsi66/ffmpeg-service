@@ -467,17 +467,18 @@ async function renderVideo(videoId, images, audioUrl, format, theme, sceneTiming
         `[vconcat]trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
     }
 
-    if (overlayPath) {
+   if (overlayPath) {
       filter +=
         `;[${overlayIdx}:v]scale=${W}:${H}:force_original_aspect_ratio=decrease,` +
         `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,` +
         `fps=${fps},format=yuva420p,setsar=1,` +
         `colorchannelmixer=aa=0.25,setpts=PTS-STARTPTS[ov]` +
-        // CHANGE 1: force format=yuv420 in the overlay
-        // CHANGE 2: chain a format=yuv420p immediately after the [v] output
-        `;[base][ov]overlay=shortest=1:format=yuv420[v_temp]` +
-        `;[v_temp]format=yuv420p[v]`; 
+        // 1. Force the overlay filter to use yuv420 internally
+        // 2. IMMEDIATELY convert the result to yuv420p to satisfy libx264
+        `;[base][ov]overlay=shortest=1:format=yuv420[v_pre]` +
+        `;[v_pre]format=yuv420p[v]`; 
     } else {
+      // Even without an overlay, force the format one last time for safety
       filter += `;[base]format=yuv420p[v]`;
     }
 
