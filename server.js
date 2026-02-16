@@ -468,15 +468,17 @@ async function renderVideo(videoId, images, audioUrl, format, theme, sceneTiming
     }
 
    if (overlayPath) {
-      // Force a deterministic format pipeline: base RGBA + overlay RGBA -> overlay -> back to yuv420p
       filter +=
-        `;[base]format=rgba[base_rgba]` +
         `;[${overlayIdx}:v]scale=${W}:${H}:force_original_aspect_ratio=decrease,` +
         `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,` +
-        `fps=${fps},setsar=1,format=rgba,` +               // <- key change (rgba)
-        `colorchannelmixer=aa=0.25,setpts=PTS-STARTPTS[ov_rgba]` +
-        `;[base_rgba][ov_rgba]overlay=shortest=1:format=rgb,format=yuv420p[v]`; // <- key change
+        `fps=${fps},format=yuva420p,setsar=1,` +
+        `colorchannelmixer=aa=0.25,setpts=PTS-STARTPTS[ov]` +
+        // 1. Force the overlay filter to use yuv420 internally
+        // 2. IMMEDIATELY convert the result to yuv420p to satisfy libx264
+        `;[base][ov]overlay=shortest=1:format=yuv420[v_pre]` +
+        `;[v_pre]format=yuv420p[v]`; 
     } else {
+      // Even without an overlay, force the format one last time for safety
       filter += `;[base]format=yuv420p[v]`;
     }
 
