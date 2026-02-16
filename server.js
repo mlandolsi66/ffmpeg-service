@@ -468,16 +468,17 @@ async function renderVideo(videoId, images, audioUrl, format, theme, sceneTiming
     }
 
     if (overlayPath) {
-      // CRITICAL: Process overlay to match base video properties EXACTLY
       filter +=
         `;[${overlayIdx}:v]scale=${W}:${H}:force_original_aspect_ratio=decrease,` +
         `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,` +
         `fps=${fps},format=yuva420p,setsar=1,` +
         `colorchannelmixer=aa=0.25,setpts=PTS-STARTPTS[ov]` +
-        // FIX: Force format=yuv420 to prevent auto_scale errors
-        `;[base][ov]overlay=shortest=1:format=yuv420[v]`; 
+        // CHANGE 1: force format=yuv420 in the overlay
+        // CHANGE 2: chain a format=yuv420p immediately after the [v] output
+        `;[base][ov]overlay=shortest=1:format=yuv420[v_temp]` +
+        `;[v_temp]format=yuv420p[v]`; 
     } else {
-      filter += `;[base]copy[v]`;
+      filter += `;[base]format=yuv420p[v]`;
     }
 
     filter +=
