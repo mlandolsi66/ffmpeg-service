@@ -48,7 +48,7 @@ RUN mkdir -p overlays/9x16 overlays/16x9 && \
         echo "  → $(basename "$f")"; \
         ffmpeg -y -i "$f" \
           -vf "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,fps=30" \
-          -an -pix_fmt yuv420p \
+          -an -pix_fmt yuva420p \
           -c:v libx264 -preset veryfast -crf 23 \
           -movflags +faststart \
           "overlays/16x9/$(basename "$f")"; \
