@@ -26,7 +26,6 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
 }
 
 /* ------------------ AMBIENCE (THEME-BASED WITH RANDOM SELECTION) ------------------ */
-// ⚠️ DO NOT MODIFY - used by both video pipeline AND audiobook mix
 function pickAmbience(theme = "") {
   const ambienceDir = path.join(__dirname, "ambience");
   
@@ -38,47 +37,31 @@ function pickAmbience(theme = "") {
   const t = String(theme).toLowerCase();
   let ambiencePrefixes = [];
 
-  // ── Adventure themes ──
+  // Map theme to ambience prefixes (with fallbacks)
   if (t.includes("ocean") || t.includes("water") || t.includes("sea")) {
     ambiencePrefixes = ["waves", "underwater", "ocean"];
   } else if (t.includes("space") || t.includes("bedtime journey")) {
     ambiencePrefixes = ["space-ambience", "whitenoise-space", "space"];
-  } else if (t.includes("forest") || t.includes("wald") || t.includes("magic forest")) {
+  } else if (t.includes("forest") || t.includes("magic forest")) {
     ambiencePrefixes = ["forest-ambience", "forest"];
   } else if (t.includes("dino") || t.includes("explorer")) {
     ambiencePrefixes = ["dino", "adventure"];
-  } else if (t.includes("feen") || t.includes("fairy") || t.includes("garden")) {
-    ambiencePrefixes = ["fairy", "fairy01"];
+  } else if (t.includes("fairy") || t.includes("garden")) {
+    ambiencePrefixes = ["fairy", "garden"];
   } else if (t.includes("princess") || t.includes("star dreams")) {
     ambiencePrefixes = ["princess-ambience", "music-box", "princess"];
   } else if (t.includes("birthday") || t.includes("celebration")) {
     ambiencePrefixes = ["birthday-ambience", "birthday", "celebration"];
-  }
-  // ── Learn themes (mp3 files) ──
-  else if (t.includes("courage") || t.includes("mut")) {
-    ambiencePrefixes = ["Mut", "adventure"];
-  } else if (t.includes("friendship") || t.includes("freundschaft")) {
-    ambiencePrefixes = ["friendship", "fairy"];
-  } else if (t.includes("sharing") || t.includes("teilen")) {
-    ambiencePrefixes = ["sharing", "music-box"];
-  } else if (t.includes("fear") || t.includes("tapferkeit")) {
-    ambiencePrefixes = ["fear", "lullaby"];
-  } else if (t.includes("confidence") || t.includes("stärke") || t.includes("starke")) {
-    ambiencePrefixes = ["confidence", "adventure"];
-  }
-  // ── Fallback ──
-  else {
+  } else {
     ambiencePrefixes = ["lullaby"];
   }
 
   // Get all audio files matching ANY of the prefixes
-  // Jingle is never used as background ambience
   const matchingAudio = fs.readdirSync(ambienceDir)
     .filter(f => {
       if (!f.endsWith(".wav") && !f.endsWith(".mp3")) return false;
-      if (f === "Jingle_moonie_tales.mp3") return false;
       const lowerName = f.toLowerCase();
-      return ambiencePrefixes.some(prefix => lowerName.startsWith(prefix.toLowerCase()));
+      return ambiencePrefixes.some(prefix => lowerName.startsWith(prefix));
     });
 
   if (matchingAudio.length === 0) {
@@ -89,9 +72,7 @@ function pickAmbience(theme = "") {
       return path.join(ambienceDir, "lullaby.wav");
     }
     
-    const allAudio = fs.readdirSync(ambienceDir).filter(f => 
-      (f.endsWith(".wav") || f.endsWith(".mp3")) && f !== "Jingle_moonie_tales.mp3"
-    );
+    const allAudio = fs.readdirSync(ambienceDir).filter(f => f.endsWith(".wav") || f.endsWith(".mp3"));
     if (allAudio.length === 0) return null;
     
     const fallback = allAudio[0];
@@ -233,17 +214,16 @@ function run(cmd) {
   });
 }
 
-/* ------------------ SUPABASE UPLOAD (VIDEO) ------------------ */
-// ⚠️ Original function - used by video pipeline - DO NOT CHANGE SIGNATURE
+/* ------------------ SUPABASE UPLOAD ------------------ */
 async function uploadToSupabase(videoId, buffer) {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
     throw new Error("Supabase credentials not configured");
   }
 
-  const filePath = `final/${videoId}.mp4`;
-  const uploadUrl = `${SUPABASE_URL}/storage/v1/object/videos/${filePath}`;
+  const path = `final/${videoId}.mp4`;
+  const uploadUrl = `${SUPABASE_URL}/storage/v1/object/videos/${path}`;
 
-  console.log("📤 Uploading to Supabase:", filePath);
+  console.log("📤 Uploading to Supabase:", path);
 
   const uploadRes = await fetch(uploadUrl, {
     method: "POST",
@@ -260,48 +240,13 @@ async function uploadToSupabase(videoId, buffer) {
     throw new Error(`Supabase upload failed: ${err}`);
   }
 
-  const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/videos/${filePath}`;
+  const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/videos/${path}`;
   console.log("✅ Uploaded:", publicUrl);
 
   return publicUrl;
 }
 
-/* ------------------ SUPABASE UPLOAD (AUDIOBOOK MP3) ------------------ */
-// Separate function for audiobook MP3 uploads - does NOT touch video pipeline
-async function uploadAudioToSupabase(audiobookId, localFilePath) {
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
-    throw new Error("Supabase credentials not configured");
-  }
-
-  const destPath = `audiobooks/${audiobookId}/story_mixed.mp3`;
-  const uploadUrl = `${SUPABASE_URL}/storage/v1/object/audiobooks/${destPath}`;
-  const buffer = fs.readFileSync(localFilePath);
-
-  console.log("📤 Uploading mixed audio to Supabase:", destPath);
-
-  const uploadRes = await fetch(uploadUrl, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-      "Content-Type": "audio/mpeg",
-      "x-upsert": "true",
-    },
-    body: buffer,
-  });
-
-  if (!uploadRes.ok) {
-    const err = await uploadRes.text();
-    throw new Error(`Supabase audio upload failed: ${err}`);
-  }
-
-  const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/audiobooks/${destPath}`;
-  console.log("✅ Mixed audio uploaded:", publicUrl);
-
-  return publicUrl;
-}
-
-/* ------------------ UPDATE DB (VIDEO) ------------------ */
-// ⚠️ Original function - used by video pipeline - DO NOT CHANGE
+/* ------------------ UPDATE DB ------------------ */
 async function updateVideoStatus(videoId, status, videoUrl = null) {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
     console.warn("⚠️ Cannot update DB - no Supabase credentials");
@@ -338,126 +283,7 @@ async function updateVideoStatus(videoId, status, videoUrl = null) {
   console.log("✅ DB updated");
 }
 
-/* ==================================================
-   NEW ENDPOINT: /mix-audio
-   Called by Supabase Edge Function (generate-audiobook)
-   AFTER ElevenLabs generates the raw voice MP3.
-
-   Flow:
-     1. Download raw voice MP3 from Supabase
-     2. Download/use local Jingle_moonie_tales.mp3
-     3. Pick theme ambience (same pickAmbience() used by video)
-     4. FFmpeg: jingle(2s) → voice + ambience underneath → fade out
-     5. Upload mixed MP3 to Supabase audiobooks bucket
-     6. Return { success, audioUrl } to Edge Function
-
-   The Edge Function then saves audioUrl to the audiobooks table.
-   ================================================== */
-app.post("/mix-audio", async (req, res) => {
-  const { audiobookId, voiceUrl, theme = "" } = req.body;
-
-  if (!audiobookId || !voiceUrl) {
-    return res.status(400).json({ success: false, error: "Missing audiobookId or voiceUrl" });
-  }
-
-  console.log("🎧 /mix-audio request:", { audiobookId, theme });
-
-  const dir = `/tmp/mix_${audiobookId}`;
-
-  try {
-    fs.mkdirSync(dir, { recursive: true });
-
-    // ── 1. Paths ──
-    const jinglePath = path.join(__dirname, "ambience", "Jingle_moonie_tales.mp3");
-    const voicePath = `${dir}/voice.mp3`;
-    const outPath = `${dir}/mixed.mp3`;
-
-    if (!fs.existsSync(jinglePath)) {
-      throw new Error("Jingle_moonie_tales.mp3 not found in ambience folder");
-    }
-
-    // ── 2. Download ElevenLabs voice MP3 ──
-    await download(voiceUrl, voicePath);
-
-    // ── 3. Pick ambience (same function used by video pipeline) ──
-    const ambPath = pickAmbience(theme);
-    if (!ambPath || !fs.existsSync(ambPath)) {
-      throw new Error(`Ambience not found for theme: ${theme}`);
-    }
-
-    // ── 4. Measure durations ──
-    const jingleDur = ffprobeDuration(jinglePath);
-    const voiceDur  = ffprobeDuration(voicePath);
-    const totalDur  = jingleDur + voiceDur;
-
-    // Ambience fades in 1.5s after jingle ends, fades out 2s before end
-    const ambFadeInStart  = jingleDur;
-    const ambFadeInDur    = 1.5;
-    const ambFadeOutStart = Math.max(totalDur - 2.0, ambFadeInStart + ambFadeInDur + 1);
-
-    console.log(`⏱ Jingle: ${jingleDur.toFixed(2)}s | Voice: ${voiceDur.toFixed(2)}s | Total: ${totalDur.toFixed(2)}s`);
-    console.log(`🎧 Ambience: ${path.basename(ambPath)}`);
-
-    // ── 5. FFmpeg mix ──
-    // Input 0: jingle MP3
-    // Input 1: voice MP3  (ElevenLabs output - already MP3, works fine)
-    // Input 2: ambience   (looped - can be .wav or .mp3, FFmpeg handles both)
-    //
-    // Structure:
-    //   [jingle 2s, fade out last 0.3s]
-    //   [voice starts immediately after jingle]
-    //   [ambience fades in softly under voice, volume 0.15]
-    //   [ambience fades out near end]
-
-    const ffmpegCmd = [
-      `ffmpeg -y`,
-      `-i "${jinglePath}"`,
-      `-i "${voicePath}"`,
-      `-stream_loop -1 -i "${ambPath}"`,
-      `-filter_complex`,
-      `"[0:a]aformat=fltp:44100:stereo,afade=t=out:st=${(jingleDur - 0.3).toFixed(2)}:d=0.3[jingle];` +
-      `[1:a]aformat=fltp:44100:stereo[voice];` +
-      `[jingle][voice]concat=n=2:v=0:a=1[fg];` +
-      `[2:a]aformat=fltp:44100:stereo,` +
-        `atrim=0:${totalDur.toFixed(2)},` +
-        `volume=0.15,` +
-        `afade=t=in:st=${ambFadeInStart.toFixed(2)}:d=${ambFadeInDur},` +
-        `afade=t=out:st=${ambFadeOutStart.toFixed(2)}:d=2.0,` +
-        `asetpts=PTS-STARTPTS[amb];` +
-      `[fg][amb]amix=inputs=2:duration=first:dropout_transition=0[out]"`,
-      `-map "[out]"`,
-      `-t ${totalDur.toFixed(2)}`,
-      `-c:a libmp3lame -b:a 192k -ar 44100`,
-      `"${outPath}"`,
-    ].join(" ");
-
-    console.log("🧠 mix-audio FFmpeg command length:", ffmpegCmd.length);
-    await run(ffmpegCmd);
-
-    if (!fs.existsSync(outPath)) {
-      throw new Error("FFmpeg did not produce mixed audio output");
-    }
-
-    const sizeMB = (fs.statSync(outPath).size / 1024 / 1024).toFixed(2);
-    console.log(`📦 Mixed audio: ${sizeMB} MB`);
-
-    // ── 6. Upload to Supabase audiobooks bucket ──
-    const publicUrl = await uploadAudioToSupabase(audiobookId, outPath);
-
-    // ── 7. Cleanup ──
-    fs.rmSync(dir, { recursive: true, force: true });
-
-    console.log("✅ /mix-audio done:", publicUrl);
-    return res.json({ success: true, audioUrl: publicUrl });
-
-  } catch (err) {
-    console.error("🔥 /mix-audio failed:", err);
-    if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
-    return res.status(500).json({ success: false, error: String(err.message || err) });
-  }
-});
-
-/* ------------------ RENDER (ASYNC) - VIDEO PIPELINE UNCHANGED ------------------ */
+/* ------------------ RENDER (ASYNC) ------------------ */
 async function renderVideo(videoId, images, audioUrl, format, theme, sceneTimings = null) {
   const dir = `/tmp/${videoId}`;
 
@@ -715,7 +541,7 @@ async function renderVideo(videoId, images, audioUrl, format, theme, sceneTiming
   }
 }
 
-/* ------------------ /render ENDPOINT - VIDEO PIPELINE UNCHANGED ------------------ */
+/* ------------------ ENDPOINT ------------------ */
 app.post("/render", async (req, res) => {
   try {
     const { videoId, images, audioUrl, format = "9:16", theme = "", sceneTimings = null } = req.body;
@@ -723,6 +549,7 @@ app.post("/render", async (req, res) => {
     console.log("🎬 Render request:", { videoId, format, theme });
     console.log("🖼 Images:", images?.length);
     console.log("⏱ Scene timings:", sceneTimings ? "provided" : "not provided (will use equal split)");
+
 
     if (!videoId || !images?.length || !audioUrl) {
       return res.status(400).json({ error: "Missing inputs" });
