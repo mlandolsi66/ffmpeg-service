@@ -2,8 +2,8 @@
 # DOCKERFILE - Build-time normalization
 # ============================================
 # ✅ Normalizes overlays during build (10s videos = fast)
-# ✅ Verifies all assets exist (wav + mp3 ambience)
-# ✅ Fails build if critical assets missing
+# ✅ Verifies all assets exist
+# ✅ Fails build if assets missing
 # ============================================
 FROM node:18-slim
 
@@ -56,11 +56,13 @@ RUN mkdir -p overlays/9x16 overlays/16x9 && \
     else \
       echo "⚠️  No raw 16:9 overlays found"; \
     fi && \
-    echo "🔧 Adding ocean overlays..." && \
+    echo "🔧 Adding ocean overlays to normalized directories..." && \
+    # Copy blue-pink-powder to ocean_1 for 9:16
     if [ -f "overlays/9x16/blue-pink-powder_ready.mp4" ]; then \
       cp "overlays/9x16/blue-pink-powder_ready.mp4" "overlays/9x16/ocean_1.mp4" && \
       echo "  → Added ocean_1.mp4 (9:16)"; \
     fi && \
+    # Copy sparkles to ocean_1 for 16:9
     if [ -f "overlays/16x9/sparkles.mp4" ]; then \
       cp "overlays/16x9/sparkles.mp4" "overlays/16x9/ocean_1.mp4" && \
       echo "  → Added ocean_1.mp4 (16:9)"; \
@@ -74,16 +76,13 @@ RUN echo "🔍 Verifying assets..." && \
     test -d endcards || (echo "❌ endcards directory missing" && exit 1) && \
     ls overlays/9x16/*.mp4 || (echo "❌ No 9:16 overlays found" && exit 1) && \
     ls overlays/16x9/*.mp4 || (echo "❌ No 16:9 overlays found" && exit 1) && \
-    (ls ambience/*.wav 1>/dev/null 2>&1 || ls ambience/*.mp3 1>/dev/null 2>&1) || \
-      (echo "❌ No ambience files found (.wav or .mp3)" && exit 1) && \
-    test -f ambience/Jingle_moonie_tales.mp3 || \
-      (echo "❌ Jingle_moonie_tales.mp3 missing from ambience!" && exit 1) && \
-    ls endcards/*.jpg 2>/dev/null || echo "⚠️  No endcard files found (optional)" && \
+    ls ambience/*.wav || (echo "❌ No ambience files found" && exit 1) && \
+    ls endcards/*.jpg || echo "⚠️  No endcard files found (optional)" && \
     echo "✅ All assets verified" && \
     echo "📂 9:16 overlays:" && ls -lh overlays/9x16/ && \
     echo "📂 16:9 overlays:" && ls -lh overlays/16x9/ && \
     echo "📂 Ambience:" && ls -lh ambience/ && \
-    echo "📂 End cards:" && ls -lh endcards/ 2>/dev/null || true
+    echo "📂 End cards:" && ls -lh endcards/
 
 # ---------- Health check ----------
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
