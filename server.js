@@ -364,8 +364,15 @@ async function renderVideo(videoId, images, audioUrl, format, theme, sceneTiming
     console.log(`📐 Output resolution: ${W}x${H}`);
     console.log(`🖼️ Images: ${numStoryImages}, total story duration: ${storyDuration.toFixed(2)}s`);
 
-    /* ---------- INPUTS (LOCKED ORDER) ---------- */
-    let cmdInputs = images
+    /* ========== TWO-PASS RENDER (avoids resource exhaustion with many inputs) ========== */
+    const fadeDuration = 0.5;
+    const scaleW = Math.round(W * 1.1);
+    const scaleH = Math.round(H * 1.1);
+    const out = `${dir}/out.mp4`;
+    const tempConcat = `${dir}/concat.mp4`;
+
+    /* ---------- PASS 1: CONCAT IMAGES → intermediate video ---------- */
+    let pass1Inputs = images
       .map(
         (_, i) =>
           `-loop 1 -framerate ${fps} -t ${imageDurations[i]} -i "${dir}/img${i}.jpg"`
@@ -373,71 +380,48 @@ async function renderVideo(videoId, images, audioUrl, format, theme, sceneTiming
       .join(" ");
 
     if (endCardPath) {
-      cmdInputs += ` -loop 1 -framerate ${fps} -t ${endCardDuration} -i "${endCardPath}"`;
+      pass1Inputs += ` -loop 1 -framerate ${fps} -t ${endCardDuration} -i "${endCardPath}"`;
     }
 
-    cmdInputs += ` -i "${dir}/voice.mp3"`;
-    cmdInputs += ` -i "${ambPath}"`;
+    const endCardIdx = images.length;
 
-    if (overlayPath) cmdInputs += ` -stream_loop -1 -i "${overlayPath}"`;
-
-    const voiceIdx = images.length + (endCardPath ? 1 : 0);
-    const ambIdx = voiceIdx + 1;
-    const overlayIdx = ambIdx + 1;
-
-    /* ---------- FILTER GRAPH (4 PAN MOVEMENTS TO MAKE IT ALIVE) ---------- */
-    const fadeDuration = 0.5;
-    
-    // Scale images slightly larger to have room for panning (10% extra)
-    const scaleW = Math.round(W * 1.1);
-    const scaleH = Math.round(H * 1.1);
-
-    let filter = images
+    let pass1Filter = images
       .map((_, i) => {
         const duration = imageDurations[i];
         const totalFrames = Math.floor(duration * fps);
         const denom = Math.max(totalFrames - 1, 1);
-        
         const effect = i % 4;
 
         let panFilter;
         switch (effect) {
           case 0:
-            // PAN LEFT TO RIGHT
             panFilter =
               `crop=${W}:${H}:` +
               `x='max(0,min(${scaleW - W},(${scaleW}-${W})*n/${denom}))':` +
               `y='(${scaleH}-${H})/2'`;
             break;
-
           case 1:
-            // PAN RIGHT TO LEFT
             panFilter =
               `crop=${W}:${H}:` +
               `x='max(0,min(${scaleW - W},(${scaleW}-${W})*(1-n/${denom})))':` +
               `y='(${scaleH}-${H})/2'`;
             break;
-
           case 2:
-            // PAN TOP TO BOTTOM
             panFilter =
               `crop=${W}:${H}:` +
               `x='(${scaleW}-${W})/2':` +
               `y='max(0,min(${scaleH - H},(${scaleH}-${H})*n/${denom}))'`;
             break;
-
           case 3:
-            // PAN BOTTOM TO TOP
             panFilter =
               `crop=${W}:${H}:` +
               `x='(${scaleW}-${W})/2':` +
               `y='max(0,min(${scaleH - H},(${scaleH}-${H})*(1-n/${denom})))'`;
             break;
         }
-        
-        // CRITICAL FIX: Apply setsar=1 BEFORE any concat to ensure SAR consistency
+
         const baseFilter = `[${i}:v]scale=${scaleW}:${scaleH}:force_original_aspect_ratio=increase,crop=${scaleW}:${scaleH},${panFilter},fps=${fps},format=yuv420p,setsar=1,setpts=PTS-STARTPTS`;
-        
+
         if (i === 0) {
           return baseFilter + `,fade=t=in:st=0:d=${fadeDuration}[v${i}]`;
         } else if (i === images.length - 1) {
@@ -448,59 +432,73 @@ async function renderVideo(videoId, images, audioUrl, format, theme, sceneTiming
       })
       .join(";");
 
-    const endCardIdx = images.length;
-
     if (endCardPath) {
-      // CRITICAL FIX: Set SAR=1 on end card BEFORE concat to match other streams
-      filter += `;[${endCardIdx}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=${fps},format=yuv420p,setsar=1,setpts=PTS-STARTPTS,fade=t=in:st=0:d=${fadeDuration}[vendcard]`;
-      
-      filter +=
+      pass1Filter += `;[${endCardIdx}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=${fps},format=yuv420p,setsar=1,setpts=PTS-STARTPTS,fade=t=in:st=0:d=${fadeDuration}[vendcard]`;
+      pass1Filter +=
         ";" +
         images.map((_, i) => `[v${i}]`).join("") +
         `[vendcard]concat=n=${images.length + 1}:v=1:a=0[vconcat];` +
         `[vconcat]trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
     } else {
-      filter +=
+      pass1Filter +=
         ";" +
         images.map((_, i) => `[v${i}]`).join("") +
         `concat=n=${images.length}:v=1:a=0[vconcat];` +
         `[vconcat]trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
     }
 
-   if (overlayPath) {
-      filter +=
-        `;[${overlayIdx}:v]scale=${W}:${H}:force_original_aspect_ratio=decrease,` +
+    pass1Filter += `;[base]format=yuv420p[v]`;
+
+    const ffmpegPass1 =
+      `ffmpeg -y ${pass1Inputs} ` +
+      `-filter_complex "${pass1Filter}" ` +
+      `-map "[v]" ` +
+      `-c:v libx264 -preset veryfast -crf 18 -pix_fmt yuv420p "${tempConcat}"`;
+
+    console.log("🎬 Pass 1: Concatenating", images.length, "images" + (endCardPath ? " + end card" : "") + "...");
+    console.log("🧠 Pass 1 command length:", ffmpegPass1.length, "chars");
+    await run(ffmpegPass1);
+
+    /* ---------- PASS 2: OVERLAY + AUDIO MIX ---------- */
+    let pass2Inputs = `-i "${tempConcat}" -i "${dir}/voice.mp3" -i "${ambPath}"`;
+    if (overlayPath) pass2Inputs += ` -stream_loop -1 -i "${overlayPath}"`;
+
+    // In pass 2: 0=concat video, 1=voice, 2=ambience, 3=overlay (if present)
+    let pass2Filter = "";
+
+    if (overlayPath) {
+      pass2Filter =
+        `[3:v]scale=${W}:${H}:force_original_aspect_ratio=decrease,` +
         `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,` +
         `fps=${fps},format=yuva420p,setsar=1,` +
         `colorchannelmixer=aa=0.25,setpts=PTS-STARTPTS[ov]` +
-        // The [v_pre] and format=yuv420p is the wall that stops the ARGB crash
-        `;[base][ov]overlay=shortest=1:format=yuv420[v_pre]` + 
-        `;[v_pre]format=yuv420p[v]`; 
+        `;[0:v][ov]overlay=shortest=1:format=yuv420[v_pre]` +
+        `;[v_pre]format=yuv420p[v]`;
     } else {
-      filter += `;[base]format=yuv420p[v]`;
+      pass2Filter = `[0:v]format=yuv420p[v]`;
     }
 
-    filter +=
-      `;[${voiceIdx}:a]aformat=fltp:48000:stereo,asetpts=PTS-STARTPTS[vox]` +
-      `;[${ambIdx}:a]aformat=fltp:48000:stereo,` +
+    pass2Filter +=
+      `;[1:a]aformat=fltp:48000:stereo,asetpts=PTS-STARTPTS[vox]` +
+      `;[2:a]aformat=fltp:48000:stereo,` +
       `aloop=loop=-1:size=2e+09,volume=0.18,apad,` +
       `atrim=0:${audioDur},asetpts=PTS-STARTPTS[amb]` +
       `;[vox][amb]amix=inputs=2:duration=first:dropout_transition=0[a]`;
 
-    /* ---------- EXEC ---------- */
-    const out = `${dir}/out.mp4`;
-
-    const ffmpeg =
-      `ffmpeg -y ${cmdInputs} ` +
-      `-filter_complex "${filter}" ` +
+    const ffmpegPass2 =
+      `ffmpeg -y ${pass2Inputs} ` +
+      `-filter_complex "${pass2Filter}" ` +
       `-map "[v]" -map "[a]" ` +
       `-t ${audioDur} ` +
       `-c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -movflags +faststart ` +
       `-c:a aac -b:a 160k "${out}"`;
 
-    console.log("🧠 FFmpeg command length:", ffmpeg.length, "chars");
+    console.log("🎬 Pass 2: Adding overlay + audio...");
+    console.log("🧠 Pass 2 command length:", ffmpegPass2.length, "chars");
+    await run(ffmpegPass2);
 
-    await run(ffmpeg);
+    // Clean up intermediate file
+    if (fs.existsSync(tempConcat)) fs.unlinkSync(tempConcat);
 
     // Verify output exists
     if (!fs.existsSync(out)) {
