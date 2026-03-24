@@ -76,7 +76,7 @@ RUN echo "🔍 Verifying assets..." && \
     test -d endcards || (echo "❌ endcards directory missing" && exit 1) && \
     ls overlays/9x16/*.mp4 || (echo "❌ No 9:16 overlays found" && exit 1) && \
     ls overlays/16x9/*.mp4 || (echo "❌ No 16:9 overlays found" && exit 1) && \
-    ls ambience/*.wav || (echo "❌ No ambience files found" && exit 1) && \
+    (ls ambience/*.wav 2>/dev/null || ls ambience/*.mp3 2>/dev/null) || (echo "❌ No ambience files found" && exit 1) && \
     ls endcards/*.jpg || echo "⚠️  No endcard files found (optional)" && \
     echo "✅ All assets verified" && \
     echo "📂 9:16 overlays:" && ls -lh overlays/9x16/ && \
