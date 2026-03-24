@@ -457,8 +457,8 @@ async function renderVideo(videoId, images, audioUrl, format, theme, sceneTiming
             break;
         }
         
-        // CRITICAL FIX: Apply setsar=1 BEFORE any concat to ensure SAR consistency
-        const baseFilter = `[${i}:v]scale=${scaleW}:${scaleH}:force_original_aspect_ratio=increase,crop=${scaleW}:${scaleH},${panFilter},fps=${fps},format=yuv420p,setsar=1,setpts=PTS-STARTPTS`;
+        // CRITICAL FIX: Apply format=yuv420p FIRST to strip alpha channel from FAL.AI images
+        const baseFilter = `[${i}:v]format=yuv420p,scale=${scaleW}:${scaleH}:force_original_aspect_ratio=increase,crop=${scaleW}:${scaleH},${panFilter},fps=${fps},setsar=1,setpts=PTS-STARTPTS`;
         
         if (i === 0) {
           return baseFilter + `,fade=t=in:st=0:d=${fadeDuration}[v${i}]`;
@@ -473,8 +473,8 @@ async function renderVideo(videoId, images, audioUrl, format, theme, sceneTiming
     const endCardIdx = images.length;
 
     if (endCardPath) {
-      // CRITICAL FIX: Set SAR=1 on end card BEFORE concat to match other streams
-      filter += `;[${endCardIdx}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=${fps},format=yuv420p,setsar=1,setpts=PTS-STARTPTS,fade=t=in:st=0:d=${fadeDuration}[vendcard]`;
+      // CRITICAL FIX: Set format=yuv420p FIRST on end card to strip alpha, then SAR=1
+      filter += `;[${endCardIdx}:v]format=yuv420p,scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=${fps},setsar=1,setpts=PTS-STARTPTS,fade=t=in:st=0:d=${fadeDuration}[vendcard]`;
       
       filter +=
         ";" +
