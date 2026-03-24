@@ -505,7 +505,10 @@ async function renderVideo(videoId, images, audioUrl, format, theme, sceneTiming
     // Verify output exists
     if (!fs.existsSync(out)) {
       console.error("❌ FFmpeg completed but output file missing!");
-      console.error("❌ Directory contents:", fs.readdirSync(dir));
+      console.error("❌ Directory contents:",
+        fs.existsSync(dir)
+          ? fs.readdirSync(dir)
+          : "already cleaned up");
       throw new Error("FFmpeg did not produce output file");
     }
 
@@ -555,6 +558,38 @@ app.post("/render", async (req, res) => {
       return res.status(400).json({ error: "Missing inputs" });
     }
 
+    if (activeRenders.has(videoId)) {
+      console.log(`⚠️ Already rendering ${videoId}, skipping duplicate`);
+      return res.status(202).json({
+        success: true,
+        message: "Already rendering",
+        videoId,
+      });
+    }
+
+    // Check DB status too
+    const checkRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/videos?id=eq.${videoId}&select=status`,
+      {
+        headers: {
+          Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+          apikey: SUPABASE_SERVICE_KEY,
+        },
+      }
+    );
+    const checkData = await checkRes.json();
+    const currentStatus = checkData[0]?.status;
+    if (currentStatus === 'done' || currentStatus === 'rendering') {
+      console.log(`⚠️ Video ${videoId} already ${currentStatus}, skipping`);
+      return res.status(202).json({
+        success: true,
+        message: `Already ${currentStatus}`,
+        videoId,
+      });
+    }
+
+    activeRenders.add(videoId);
+
     await updateVideoStatus(videoId, "rendering");
 
     res.status(202).json({
@@ -563,9 +598,14 @@ app.post("/render", async (req, res) => {
       videoId,
     });
 
-    renderVideo(videoId, images, audioUrl, format, theme, sceneTimings).catch((e) => {
-      console.error("🔥 Background render failed:", e);
-    });
+    renderVideo(videoId, images, audioUrl, format, theme, sceneTimings)
+      .catch((e) => {
+        console.error("🔥 Background render failed:", e);
+      })
+      .finally(() => {
+        activeRenders.delete(videoId);
+        console.log(`🔓 Render lock released for ${videoId}`);
+      });
     
   } catch (e) {
     console.error("🔥 /render endpoint failed:", e);
