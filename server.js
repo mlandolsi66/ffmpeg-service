@@ -15,7 +15,7 @@ app.use(express.json({ limit: "50mb" }));
 
 const activeRenders = new Set();
 
-const TEST_MODE = process.env.TEST_MODE === 'true';
+const TEST_MODE = true;
 
 const TEST_IMAGES = [
   "https://v3b.fal.media/files/b/0a936b6e/TDa6Kuq94rHYyPy4gPRG6_a41394ddd32742c782b11274fb4e8933.jpg",
