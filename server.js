@@ -89,9 +89,12 @@ function pickAmbience(theme = "") {
   if (matchingAudio.length === 0) {
     console.log(`⚠️ No ambience found for "${ambiencePrefixes.join('/')}", using fallback`);
     
-    if (fs.existsSync(path.join(ambienceDir, "lullaby.wav"))) {
-      console.log(`🎧 Using fallback: lullaby.wav`);
-      return path.join(ambienceDir, "lullaby.wav");
+    const lullabyWav = path.join(ambienceDir, "lullaby.wav");
+    const lullabyMp3 = path.join(ambienceDir, "lullaby.mp3");
+    if (fs.existsSync(lullabyMp3)) {
+      return lullabyMp3;
+    } else if (fs.existsSync(lullabyWav)) {
+      return lullabyWav;
     }
     
     const allAudio = fs.readdirSync(ambienceDir).filter(f => f.endsWith(".wav") || f.endsWith(".mp3"));
