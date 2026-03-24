@@ -13,28 +13,6 @@ const __dirname = path.dirname(__filename);
 const app = express();
 app.use(express.json({ limit: "50mb" }));
 
-const activeRenders = new Set();
-
-const TEST_MODE = true;
-
-const TEST_IMAGES = [
-  "https://v3b.fal.media/files/b/0a936b6e/TDa6Kuq94rHYyPy4gPRG6_a41394ddd32742c782b11274fb4e8933.jpg",
-  "https://v3b.fal.media/files/b/0a936b6e/8QBP0oDwkYgrQRzewoWfF_fd75f3571caa432d9be4ca35fbe87afd.jpg",
-  "https://v3b.fal.media/files/b/0a936b6e/gYmsPSynXKDdhCk2golSi_ef86b16f23404cb8bba4c9186fad1bd4.jpg",
-  "https://v3b.fal.media/files/b/0a936b6e/9xrfhvdk0W1tubVWhAefq_ee663fab330e41ef8a472a0fc21159b6.jpg",
-  "https://v3b.fal.media/files/b/0a936b6e/umhHvwamnRjolesrx87Gx_41bb0daa762b4a0085f060cee94c5344.jpg",
-  "https://v3b.fal.media/files/b/0a936b6e/M1fqQwWK1dI1ikwdwsndf_60d9d0a14df64a89badf443d50497281.jpg",
-  "https://v3b.fal.media/files/b/0a936b6e/2MU4NnO_e1m8NOmXHMttY_f6695995dc844f82a0fc3a93dd4f643a.jpg",
-  "https://v3b.fal.media/files/b/0a936b6e/k4E9iaPJ5rkLv8IdgRPre_551c401338844140878f684964f226f0.jpg",
-  "https://v3b.fal.media/files/b/0a936b6e/IB-dZWXCC-pilsI4PDL22_607e9e3068144ef39f9437de947bb779.jpg",
-  "https://v3b.fal.media/files/b/0a936b6e/v-KHT9gZqRnxrkfGZJ_R9_f6a0c68f92f4400d897e3ac4e1d59bb5.jpg",
-  "https://v3b.fal.media/files/b/0a936b6e/0Fd2IUyS3Yo18H_-Anv0B_a520074f5d1a4b09b5e029628c00dfbf.jpg",
-  "https://v3b.fal.media/files/b/0a936b6e/WaYNBRAs9Shy_8_HGnu61_36242ca4f35d4228a1a2c72d5b8e9609.jpg",
-  "https://v3b.fal.media/files/b/0a936b6e/zqys5y0jWsL46AUn8O3KU_eff6837637df461b8e618a9090a70def.jpg",
-  "https://v3b.fal.media/files/b/0a936b6e/mQkAmXmFvzNFpxsj_SI1e_771c14064a874c09a57a657272774c72.jpg",
-  "https://v3b.fal.media/files/b/0a936b6e/lNJNp1CYhTvOPp9e5TtO8_1dc5c85800c74d09b481dc639a66771b.jpg"
-];
-
 console.log("🚀 Server starting");
 console.log("📂 process.cwd() =", process.cwd());
 console.log("📂 __dirname =", __dirname);
@@ -89,12 +67,9 @@ function pickAmbience(theme = "") {
   if (matchingAudio.length === 0) {
     console.log(`⚠️ No ambience found for "${ambiencePrefixes.join('/')}", using fallback`);
     
-    const lullabyWav = path.join(ambienceDir, "lullaby.wav");
-    const lullabyMp3 = path.join(ambienceDir, "lullaby.mp3");
-    if (fs.existsSync(lullabyMp3)) {
-      return lullabyMp3;
-    } else if (fs.existsSync(lullabyWav)) {
-      return lullabyWav;
+    if (fs.existsSync(path.join(ambienceDir, "lullaby.wav"))) {
+      console.log(`🎧 Using fallback: lullaby.wav`);
+      return path.join(ambienceDir, "lullaby.wav");
     }
     
     const allAudio = fs.readdirSync(ambienceDir).filter(f => f.endsWith(".wav") || f.endsWith(".mp3"));
@@ -460,8 +435,8 @@ async function renderVideo(videoId, images, audioUrl, format, theme, sceneTiming
             break;
         }
         
-        // CRITICAL FIX: Apply format=yuv420p FIRST to strip alpha channel from FAL.AI images
-        const baseFilter = `[${i}:v]format=yuv420p,scale=${scaleW}:${scaleH}:force_original_aspect_ratio=increase,crop=${scaleW}:${scaleH},${panFilter},fps=${fps},setsar=1,setpts=PTS-STARTPTS`;
+        // CRITICAL FIX: Apply setsar=1 BEFORE any concat to ensure SAR consistency
+        const baseFilter = `[${i}:v]scale=${scaleW}:${scaleH}:force_original_aspect_ratio=increase,crop=${scaleW}:${scaleH},${panFilter},fps=${fps},format=yuv420p,setsar=1,setpts=PTS-STARTPTS`;
         
         if (i === 0) {
           return baseFilter + `,fade=t=in:st=0:d=${fadeDuration}[v${i}]`;
@@ -476,8 +451,8 @@ async function renderVideo(videoId, images, audioUrl, format, theme, sceneTiming
     const endCardIdx = images.length;
 
     if (endCardPath) {
-      // CRITICAL FIX: Set format=yuv420p FIRST on end card to strip alpha, then SAR=1
-      filter += `;[${endCardIdx}:v]format=yuv420p,scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=${fps},setsar=1,setpts=PTS-STARTPTS,fade=t=in:st=0:d=${fadeDuration}[vendcard]`;
+      // CRITICAL FIX: Set SAR=1 on end card BEFORE concat to match other streams
+      filter += `;[${endCardIdx}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=${fps},format=yuv420p,setsar=1,setpts=PTS-STARTPTS,fade=t=in:st=0:d=${fadeDuration}[vendcard]`;
       
       filter +=
         ";" +
@@ -492,15 +467,15 @@ async function renderVideo(videoId, images, audioUrl, format, theme, sceneTiming
         `[vconcat]trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
     }
 
-   // NEU — FUNKTIONIERT:
-    if (overlayPath) {
-       filter +=
+   if (overlayPath) {
+      filter +=
         `;[${overlayIdx}:v]scale=${W}:${H}:force_original_aspect_ratio=decrease,` +
         `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,` +
-        `fps=${fps},setsar=1,` +
+        `fps=${fps},format=yuva420p,setsar=1,` +
         `colorchannelmixer=aa=0.25,setpts=PTS-STARTPTS[ov]` +
-        `;[base][ov]overlay=shortest=1[v_pre]` +
-        `;[v_pre]format=yuv420p[v]`;
+        // The [v_pre] and format=yuv420p is the wall that stops the ARGB crash
+        `;[base][ov]overlay=shortest=1:format=yuv420[v_pre]` + 
+        `;[v_pre]format=yuv420p[v]`; 
     } else {
       filter += `;[base]format=yuv420p[v]`;
     }
@@ -530,10 +505,7 @@ async function renderVideo(videoId, images, audioUrl, format, theme, sceneTiming
     // Verify output exists
     if (!fs.existsSync(out)) {
       console.error("❌ FFmpeg completed but output file missing!");
-      console.error("❌ Directory contents:",
-        fs.existsSync(dir)
-          ? fs.readdirSync(dir)
-          : "already cleaned up");
+      console.error("❌ Directory contents:", fs.readdirSync(dir));
       throw new Error("FFmpeg did not produce output file");
     }
 
@@ -583,38 +555,6 @@ app.post("/render", async (req, res) => {
       return res.status(400).json({ error: "Missing inputs" });
     }
 
-    if (activeRenders.has(videoId)) {
-      console.log(`⚠️ Already rendering ${videoId}, skipping duplicate`);
-      return res.status(202).json({
-        success: true,
-        message: "Already rendering",
-        videoId,
-      });
-    }
-
-    // Check DB status too
-    const checkRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/videos?id=eq.${videoId}&select=status`,
-      {
-        headers: {
-          Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
-          apikey: SUPABASE_SERVICE_KEY,
-        },
-      }
-    );
-    const checkData = await checkRes.json();
-    const currentStatus = checkData[0]?.status;
-    if (currentStatus === 'done' || currentStatus === 'rendering') {
-      console.log(`⚠️ Video ${videoId} already ${currentStatus}, skipping`);
-      return res.status(202).json({
-        success: true,
-        message: `Already ${currentStatus}`,
-        videoId,
-      });
-    }
-
-    activeRenders.add(videoId);
-
     await updateVideoStatus(videoId, "rendering");
 
     res.status(202).json({
@@ -623,21 +563,9 @@ app.post("/render", async (req, res) => {
       videoId,
     });
 
-    // TEST MODE: use static images instead of FAL.AI
-    let finalImages = images;
-    if (TEST_MODE) {
-      console.log('🧪 TEST_MODE: Using static test images');
-      finalImages = TEST_IMAGES.slice(0, images.length);
-    }
-
-    renderVideo(videoId, finalImages, audioUrl, format, theme, sceneTimings)
-      .catch((e) => {
-        console.error("🔥 Background render failed:", e);
-      })
-      .finally(() => {
-        activeRenders.delete(videoId);
-        console.log(`🔓 Render lock released for ${videoId}`);
-      });
+    renderVideo(videoId, images, audioUrl, format, theme, sceneTimings).catch((e) => {
+      console.error("🔥 Background render failed:", e);
+    });
     
   } catch (e) {
     console.error("🔥 /render endpoint failed:", e);
