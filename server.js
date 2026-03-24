@@ -13,6 +13,28 @@ const __dirname = path.dirname(__filename);
 const app = express();
 app.use(express.json({ limit: "50mb" }));
 
+const activeRenders = new Set();
+
+const TEST_MODE = process.env.TEST_MODE === 'true';
+
+const TEST_IMAGES = [
+  "https://v3b.fal.media/files/b/0a936b6e/TDa6Kuq94rHYyPy4gPRG6_a41394ddd32742c782b11274fb4e8933.jpg",
+  "https://v3b.fal.media/files/b/0a936b6e/8QBP0oDwkYgrQRzewoWfF_fd75f3571caa432d9be4ca35fbe87afd.jpg",
+  "https://v3b.fal.media/files/b/0a936b6e/gYmsPSynXKDdhCk2golSi_ef86b16f23404cb8bba4c9186fad1bd4.jpg",
+  "https://v3b.fal.media/files/b/0a936b6e/9xrfhvdk0W1tubVWhAefq_ee663fab330e41ef8a472a0fc21159b6.jpg",
+  "https://v3b.fal.media/files/b/0a936b6e/umhHvwamnRjolesrx87Gx_41bb0daa762b4a0085f060cee94c5344.jpg",
+  "https://v3b.fal.media/files/b/0a936b6e/M1fqQwWK1dI1ikwdwsndf_60d9d0a14df64a89badf443d50497281.jpg",
+  "https://v3b.fal.media/files/b/0a936b6e/2MU4NnO_e1m8NOmXHMttY_f6695995dc844f82a0fc3a93dd4f643a.jpg",
+  "https://v3b.fal.media/files/b/0a936b6e/k4E9iaPJ5rkLv8IdgRPre_551c401338844140878f684964f226f0.jpg",
+  "https://v3b.fal.media/files/b/0a936b6e/IB-dZWXCC-pilsI4PDL22_607e9e3068144ef39f9437de947bb779.jpg",
+  "https://v3b.fal.media/files/b/0a936b6e/v-KHT9gZqRnxrkfGZJ_R9_f6a0c68f92f4400d897e3ac4e1d59bb5.jpg",
+  "https://v3b.fal.media/files/b/0a936b6e/0Fd2IUyS3Yo18H_-Anv0B_a520074f5d1a4b09b5e029628c00dfbf.jpg",
+  "https://v3b.fal.media/files/b/0a936b6e/WaYNBRAs9Shy_8_HGnu61_36242ca4f35d4228a1a2c72d5b8e9609.jpg",
+  "https://v3b.fal.media/files/b/0a936b6e/zqys5y0jWsL46AUn8O3KU_eff6837637df461b8e618a9090a70def.jpg",
+  "https://v3b.fal.media/files/b/0a936b6e/mQkAmXmFvzNFpxsj_SI1e_771c14064a874c09a57a657272774c72.jpg",
+  "https://v3b.fal.media/files/b/0a936b6e/lNJNp1CYhTvOPp9e5TtO8_1dc5c85800c74d09b481dc639a66771b.jpg"
+];
+
 console.log("🚀 Server starting");
 console.log("📂 process.cwd() =", process.cwd());
 console.log("📂 __dirname =", __dirname);
@@ -598,7 +620,14 @@ app.post("/render", async (req, res) => {
       videoId,
     });
 
-    renderVideo(videoId, images, audioUrl, format, theme, sceneTimings)
+    // TEST MODE: use static images instead of FAL.AI
+    let finalImages = images;
+    if (TEST_MODE) {
+      console.log('🧪 TEST_MODE: Using static test images');
+      finalImages = TEST_IMAGES.slice(0, images.length);
+    }
+
+    renderVideo(videoId, finalImages, audioUrl, format, theme, sceneTimings)
       .catch((e) => {
         console.error("🔥 Background render failed:", e);
       })
