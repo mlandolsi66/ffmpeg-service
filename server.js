@@ -492,13 +492,14 @@ async function renderVideo(videoId, images, audioUrl, format, theme, sceneTiming
         `[vconcat]trim=0:${audioDur},setpts=PTS-STARTPTS[base]`;
     }
 
-   if (overlayPath) {
+   // NEU — FUNKTIONIERT:
+    if (overlayPath) {
        filter +=
         `;[${overlayIdx}:v]scale=${W}:${H}:force_original_aspect_ratio=decrease,` +
         `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,` +
-        `fps=${fps},format=yuva420p,setsar=1,` +
+        `fps=${fps},setsar=1,` +
         `colorchannelmixer=aa=0.25,setpts=PTS-STARTPTS[ov]` +
-        `;[base][ov]overlay=shortest=1:format=yuv420p[v_pre]` +
+        `;[base][ov]overlay=shortest=1[v_pre]` +
         `;[v_pre]format=yuv420p[v]`;
     } else {
       filter += `;[base]format=yuv420p[v]`;
