@@ -481,7 +481,7 @@ async function renderVideo(videoId, images, audioUrl, format, theme, sceneTiming
     pass2Filter +=
       `;[1:a]aformat=fltp:48000:stereo,asetpts=PTS-STARTPTS[vox]` +
       `;[2:a]aformat=fltp:48000:stereo,` +
-      `aloop=loop=-1:size=2e+09,volume=0.18,apad,` +
+      `aloop=loop=-1:size=2e+09,volume=0.12,apad,` +
       `atrim=0:${audioDur},asetpts=PTS-STARTPTS[amb]` +
       `;[vox][amb]amix=inputs=2:duration=first:dropout_transition=0[a]`;
 
